@@ -1,0 +1,25 @@
+services:
+  tudget:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Optional: exposes the app at a public ngrok URL. Run with:
+  #   docker compose --profile ngrok up
+  ngrok:
+    image: ngrok/ngrok:latest
+    profiles: ["ngrok"]
+    command: ["http", "tudget:8000"]
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040" # ngrok web UI: shows your public URL
+    depends_on:
+      - tudget
+    restart: unless-stopped

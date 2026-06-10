@@ -2,6 +2,7 @@
 config.yaml
 credentials.json
 token.json
+.env
 
 # Data
 data/*.db

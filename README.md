@@ -46,6 +46,9 @@ tudget/
   config.yaml            # gitignored — your real secrets
   config.example.yaml    # committed — documents every required key
   requirements.txt
+  Dockerfile
+  docker-compose.yml      # app + optional ngrok sidecar
+  .env.example            # NGROK_AUTHTOKEN for the optional ngrok service
   data/
     tudget.db             # SQLite database (created automatically)
     receipts/             # raw receipt photos (served at /receipts/...)
@@ -54,7 +57,7 @@ tudget/
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.11+ (or Docker, see step 8)
 - A [Notion](https://www.notion.so) account + internal integration
 - A [Twilio](https://www.twilio.com) account with an SMS/MMS-capable number
 - A [Plaid](https://dashboard.plaid.com) account (sandbox is fine to start)
@@ -76,6 +79,10 @@ cp config.example.yaml config.yaml
 
 You'll fill in `config.yaml` as you go through the steps below. **Never
 commit `config.yaml`** — it's gitignored on purpose.
+
+A local Python environment is needed regardless of whether you run the
+server itself with Docker, since `setup_budget.py` and the one-time Gmail
+auth (step 3) are run by hand on the host.
 
 ---
 
@@ -143,7 +150,9 @@ commit `config.yaml`** — it's gitignored on purpose.
    ```
 
    This writes `token.json`, which the server reuses (and refreshes
-   automatically) afterwards.
+   automatically) afterwards. Do this on the host *before* starting the
+   server with Docker — `run_local_server()` needs a browser, which isn't
+   available inside the container.
 
 ### Enabling transaction alerts in each bank
 
@@ -226,6 +235,10 @@ POST) for your Twilio number, pointing at `https://<your-ngrok-url>/sms`.
 that gets attached to the Notion Transactions record, so ngrok needs to
 stay running for those image embeds to load.
 
+If you're running with Docker, you can use the bundled `ngrok` service
+instead (see step 8) — either way, you need the resulting URL in
+`config.yaml` *before* starting the server, and in Twilio's webhook config.
+
 ---
 
 ## 7. Set your budget
@@ -244,6 +257,11 @@ writes the confirmed limits to the Notion Categories database.
 
 ## 8. Run the server
 
+By the time you get here, `config.yaml`, `credentials.json`, and
+`token.json` should all exist in the project root.
+
+### Option A: Python venv
+
 ```bash
 source .venv/bin/activate
 uvicorn main:app --host 0.0.0.0 --port 8000
@@ -255,9 +273,32 @@ In another terminal, keep ngrok running:
 ngrok http 8000
 ```
 
-On startup, Tudget loads your categories from Notion, then starts three
-background loops: the Gmail poller, an hourly Notion category refresh, and
-the nightly Plaid reconciliation scheduler.
+### Option B: Docker
+
+```bash
+docker compose up --build
+```
+
+This builds the image and runs the server with `config.yaml`,
+`credentials.json`, `token.json`, and `data/` mounted from the project root
+so your database, receipts, and Gmail token persist across restarts.
+
+To also run ngrok in a sidecar container, copy `.env.example` to `.env`,
+set `NGROK_AUTHTOKEN`, then:
+
+```bash
+docker compose --profile ngrok up --build
+```
+
+Check `http://localhost:4040` for your public ngrok URL — put it in
+`config.yaml`'s `server.base_url` and Twilio's webhook config, then restart
+(`docker compose restart tudget`) so the app picks up the new `base_url`.
+
+---
+
+On startup (either option), Tudget loads your categories from Notion, then
+starts three background loops: the Gmail poller, an hourly Notion category
+refresh, and the nightly Plaid reconciliation scheduler.
 
 Check `http://localhost:8000/health` to confirm it's up.
 
