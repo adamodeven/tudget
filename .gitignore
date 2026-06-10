@@ -1,0 +1,23 @@
+# Secrets / local config
+config.yaml
+credentials.json
+token.json
+
+# Data
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/receipts/*
+!data/receipts/.gitkeep
+data/unparsed_emails.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# OS
+.DS_Store

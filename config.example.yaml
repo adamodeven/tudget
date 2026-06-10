@@ -1,0 +1,74 @@
+# Tudget configuration
+#
+# Copy this file to config.yaml and fill in your real values.
+# config.yaml is gitignored and must never be committed.
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  # Public URL that reaches this server (your ngrok URL). Used for the
+  # Twilio webhook and for linking receipt photos into Notion.
+  base_url: "https://your-subdomain.ngrok-free.app"
+
+phone:
+  # Your phone number in E.164 format. Incoming texts from any other
+  # number are ignored.
+  my_number: "+15555550123"
+
+gmail:
+  # OAuth client secret JSON downloaded from Google Cloud Console
+  # (Desktop app credentials).
+  credentials_file: "credentials.json"
+  # Created automatically the first time you authenticate.
+  token_file: "token.json"
+  poll_interval_seconds: 60
+  # Gmail label to search within (INBOX is fine for most setups).
+  label: "INBOX"
+
+twilio:
+  account_sid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  auth_token: "your_twilio_auth_token"
+  # The Twilio number that texts you and receives your replies.
+  from_number: "+15555550100"
+
+notion:
+  api_key: "secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  categories_db_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  transactions_db_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  budget_summary_db_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  # How often (seconds) to re-read the Categories DB for budget changes.
+  category_refresh_interval_seconds: 3600
+
+plaid:
+  client_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  environment: "sandbox" # sandbox | development | production
+  # Hour (0-23, local server time) the nightly reconciliation job runs.
+  reconciliation_hour: 2
+  accounts:
+    - name: "Chase Credit"
+      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    - name: "SoFi Credit"
+      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    - name: "SoFi Debit"
+      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    - name: "Fidelity Debit"
+      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    - name: "Venmo Credit"
+      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+receipts:
+  storage_dir: "data/receipts"
+
+# Email senders used to recognize bank transaction-alert emails.
+# Adjust these if a bank uses a different alert address than the default.
+bank_senders:
+  chase: "no.reply.alerts@chase.com"
+  sofi: "noreply@sofi.com"
+  fidelity: "profile_email@fidelity.com"
+  venmo: "venmo@venmo.com"
