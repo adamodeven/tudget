@@ -2,18 +2,19 @@
 
 Tudget. Text budget.
 
-A self-hosted budget tracker that watches your bank transaction-alert
-emails in real time, texts you after every purchase, and lets you
-categorize by replying to that text (with an optional receipt photo).
-Notion is your dashboard and budget config. Plaid runs a nightly check to
-catch anything email parsing missed. No AI, no OCR — just regex, SQLite,
-and fuzzy string matching.
+A self-hosted budget tracker that watches your bank apps' push
+notifications in real time (via a tethered Android relay device), texts
+you after every purchase, and lets you categorize by replying to that text
+(with an optional receipt photo). Notion is your dashboard and budget
+config. Plaid runs a nightly check to catch anything notification parsing
+missed. No AI, no OCR — just regex, SQLite, and fuzzy string matching.
 
 ## How it works
 
-1. **Gmail polling** (every 60s by default) checks for new transaction
-   alert emails from Chase, SoFi, Fidelity, and Venmo, and parses out the
-   merchant, amount, and card.
+1. A spare Android phone, tethered to the server over USB and signed into
+   your Chase, SoFi, Fidelity, and Venmo apps, forwards every bank app
+   notification to Tudget's `/notification` endpoint the instant it
+   arrives. Tudget parses out the merchant, amount, and card.
 2. Tudget texts you: `Chase: Chipotle $12.47 — reply with category (Food /
    Going Out / Transport / Shopping / Subscriptions / Other) and optionally
    attach a receipt photo`.
@@ -27,15 +28,15 @@ and fuzzy string matching.
 5. You can also text Tudget out of the blue — `"CVS $8.50 health"` or
    `"$12 coffee going out"` — and it'll log it as a manual transaction.
 6. Every night at 2am, Plaid pulls the last 24h of transactions across all
-   accounts and texts you a summary of anything email parsing missed.
+   accounts and texts you a summary of anything notification parsing
+   missed.
 
 ## Project structure
 
 ```
 tudget/
   main.py              # FastAPI app, routes, background jobs
-  gmail_poller.py       # polls Gmail, parses bank emails, triggers the SMS flow
-  bank_parsers.py        # per-bank email body -> {merchant, amount, card} parsers
+  notification_parsers.py # per-bank push-notification text -> {merchant, amount, card} parsers
   twilio_client.py      # send/receive MMS, category fuzzy-matching, manual entry parsing
   notion_sync.py        # reads/writes the three Notion databases
   plaid_client.py       # nightly reconciliation
@@ -47,22 +48,29 @@ tudget/
   config.example.yaml    # committed — documents every required key
   requirements.txt
   Dockerfile
-  docker-compose.yml      # app + optional ngrok sidecar
-  .env.example            # NGROK_AUTHTOKEN for the optional ngrok service
+  docker-compose.yml      # app + optional ngrok and android-watchdog sidecars
+  .env.example            # NGROK_AUTHTOKEN / FORWARDER_PACKAGE for optional services
+  watchdog/
+    Dockerfile            # adb-based watchdog image for the android-watchdog service
+    watchdog.sh            # keeps the relay device's forwarder app alive
+    android/                # gitignored — persists the adb key pair
   data/
     tudget.db             # SQLite database (created automatically)
     receipts/             # raw receipt photos (served at /receipts/...)
-    unparsed_emails.log    # bank emails that matched a sender but didn't parse
+    unparsed_notifications.log # bank notifications that matched an app but didn't parse
 ```
 
 ## Prerequisites
 
 - Python 3.11+ (or Docker, see step 8)
+- A spare Android phone for the notification relay, plus a USB cable that
+  supports data transfer (not charge-only) — see device recommendations in
+  step 3
 - A [Notion](https://www.notion.so) account + internal integration
 - A [Twilio](https://www.twilio.com) account with an SMS/MMS-capable number
 - A [Plaid](https://dashboard.plaid.com) account (sandbox is fine to start)
-- A Google account + [Google Cloud](https://console.cloud.google.com) project for Gmail API access
 - [ngrok](https://ngrok.com) to expose your local server to Twilio/Notion
+  and the relay device
 
 ---
 
@@ -80,9 +88,8 @@ cp config.example.yaml config.yaml
 You'll fill in `config.yaml` as you go through the steps below. **Never
 commit `config.yaml`** — it's gitignored on purpose.
 
-A local Python environment is needed regardless of whether you run the
-server itself with Docker, since `setup_budget.py` and the one-time Gmail
-auth (step 3) are run by hand on the host.
+A local Python environment is needed to run `setup_budget.py` (step 7),
+even if you run the server itself with Docker.
 
 ---
 
@@ -133,49 +140,106 @@ auth (step 3) are run by hand on the host.
 
 ---
 
-## 3. Gmail setup (real-time transaction detection)
+## 3. Android relay device setup (real-time transaction detection)
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com),
-   create a project, and enable the **Gmail API**.
-2. Configure the **OAuth consent screen** (External is fine — add your own
-   Google account as a test user) with the `gmail.readonly` scope.
-3. Create an **OAuth client ID** of type **Desktop app**, download the
-   JSON, and save it as `credentials.json` in the project root (path is
-   configurable via `gmail.credentials_file`).
-4. Run the one-time interactive auth (opens a browser, asks you to sign in
-   and consent):
+Chase, Fidelity, SoFi, and Venmo don't all support email or SMS purchase
+alerts, but they all support **push notifications** the instant a card is
+charged. Tudget reads those notifications off a dedicated Android device
+that's tethered to your server over USB, via a small "notification
+forwarder" app that POSTs each bank notification to Tudget's
+`/notification` endpoint.
 
-   ```bash
-   python gmail_poller.py
-   ```
+This needs to be a real device — software emulators fail the Play
+Integrity checks banking apps require, and attempting to bypass that risks
+a fraud hold on your real accounts.
 
-   This writes `token.json`, which the server reuses (and refreshes
-   automatically) afterwards. Do this on the host *before* starting the
-   server with Docker — `run_local_server()` needs a browser, which isn't
-   available inside the container.
+### Device suggestion
 
-### Enabling transaction alerts in each bank
+You don't need anything fancy — a cheap, **Play Protect certified**
+Android phone that can stay plugged in 24/7 works great as a dedicated
+relay:
 
-Bank alert wording and menu paths change over time — after enabling these,
-send yourself a test purchase and check the **From** address against
-`config.yaml`'s `bank_senders` section, adjusting if needed.
+- A used/refurbished **Google Pixel** (4a/5a/6a) — stock Android, long
+  software support, cheap secondhand.
+- A budget **Samsung Galaxy A-series** (A13/A14/A15) — new for roughly
+  $100-150, Play Protect certified.
 
-- **Chase**: Profile & Settings → Alerts → turn on transaction alerts for
-  "every transaction" on your credit card, delivered by email.
-- **SoFi**: Settings → Notifications → enable purchase/transaction email
-  alerts for both your Credit Card and Checking (debit) account.
-- **Fidelity**: Profile → Alerts → set up an "Account activity" alert for
-  debit card transactions, delivered by email.
-- **Venmo (Credit Card by Synchrony)**: Account settings → Notifications →
-  enable purchase alert emails.
+What matters when picking a device:
 
-### Tuning the email parsers
+- **Play Protect certified** — check
+  [android.com/certified](https://www.android.com/certified/partners/).
+  Uncertified devices (most generic Android boxes/tablets) fail Play
+  Integrity, so the bank apps will refuse to install or log in.
+- A USB port and cable that support **data**, not just charging — some
+  cables and phone-charger USB ports are power-only and won't work for
+  `adb`.
+- 32GB of storage is plenty for the four bank apps plus the forwarder app.
 
-`bank_parsers.py` uses simple regexes for the common "$X.XX at MERCHANT"
-phrasing. If a real alert email doesn't parse, it'll be logged to
-`data/unparsed_emails.log` — use that to adjust the `MERCHANT_RE`/`AMOUNT_RE`
-patterns (or add a bank-specific tweak) to match what your bank actually
-sends.
+Avoid emulators, Android TV boxes, and "Android tablet" knockoffs without
+Google Play — banking apps won't run on them.
+
+### Set up the device
+
+1. Go through normal first-time setup (Google account, etc.), then install
+   the Chase, Fidelity, SoFi, and Venmo apps and log into each.
+2. Install a notification-forwarder app that can make an HTTP request when
+   a notification arrives —
+   [MacroDroid](https://play.google.com/store/apps/details?id=com.arlosoft.macrodroid)
+   (free tier covers this) is recommended.
+3. In MacroDroid, create one macro per bank app:
+   - **Trigger**: *Notification Received* → select the bank app, and
+     enable *"Trigger only if notification content has changed"* (avoids
+     re-firing on duplicate/updated notifications).
+   - **Action**: *HTTP Request*:
+     - Method: `POST`
+     - URL: `https://<your-ngrok-url>/notification` (your ngrok URL from
+       step 6)
+     - Headers: `X-Tudget-Secret: <notification.shared_secret>`,
+       `Content-Type: application/json`
+     - Body (JSON), using MacroDroid's notification variables:
+       ```json
+       {"package": "[nfPackage]", "title": "[nfTitle]", "text": "[nfText]"}
+       ```
+4. Set `notification.shared_secret` in `config.yaml` to a random string
+   (e.g. `python -c "import secrets; print(secrets.token_hex(24))"`) and
+   use the same value in the MacroDroid header above.
+5. Check `notification.apps` in `config.yaml` — the defaults in
+   `config.example.yaml` match each bank app's current Play Store package
+   name, but double check yours (on most Android versions, **Settings →
+   Apps → [bank app] → Advanced** shows the package name).
+6. Plug the device into the server with a USB **data** cable, enable
+   **Developer Options** (Settings → About phone → tap "Build number" 7
+   times), then enable **USB debugging** and accept the "Allow USB
+   debugging" prompt on the device, checking "Always allow from this
+   computer".
+7. Also in Developer Options, enable **Stay awake** (keeps the screen on
+   while charging) so Android doesn't suspend the forwarder app's
+   notification listener.
+
+### Keeping the relay reliable: the watchdog container
+
+Android's battery optimization (Doze) can still kill background apps,
+including notification listeners, even with "Stay awake" on. The optional
+`android-watchdog` Docker service manages this over `adb`: it whitelists
+the forwarder app from battery optimization and relaunches it if it's been
+killed.
+
+```bash
+docker compose --profile android-watchdog up -d --build
+```
+
+USB device passthrough means this service runs with elevated Docker
+permissions (`privileged: true` — see `docker-compose.yml`). If your
+forwarder app isn't MacroDroid, copy `.env.example` to `.env` and set
+`FORWARDER_PACKAGE` to its package name.
+
+### Tuning the notification parsers
+
+`notification_parsers.py` uses simple regexes for the common "$X.XX at
+MERCHANT" phrasing. If a real notification doesn't parse, it'll be logged
+to `data/unparsed_notifications.log` — use that to adjust the
+`AMOUNT_RE`/`MERCHANT_RE` patterns (or add a bank-specific tweak) to match
+what your bank's app actually sends.
 
 ---
 
@@ -230,6 +294,8 @@ ngrok http 8000
 Copy the `https://...ngrok-free.app` URL into `config.yaml` under
 `server.base_url`, and set it as the **"A message comes in"** webhook (HTTP
 POST) for your Twilio number, pointing at `https://<your-ngrok-url>/sms`.
+This is also the URL you point the Android relay device's notification
+forwarder at (step 3), with `/notification` instead of `/sms`.
 
 `server.base_url` is also used to build the public link to receipt photos
 that gets attached to the Notion Transactions record, so ngrok needs to
@@ -257,8 +323,7 @@ writes the confirmed limits to the Notion Categories database.
 
 ## 8. Run the server
 
-By the time you get here, `config.yaml`, `credentials.json`, and
-`token.json` should all exist in the project root.
+By the time you get here, `config.yaml` should exist in the project root.
 
 ### Option A: Python venv
 
@@ -279,9 +344,9 @@ ngrok http 8000
 docker compose up --build
 ```
 
-This builds the image and runs the server with `config.yaml`,
-`credentials.json`, `token.json`, and `data/` mounted from the project root
-so your database, receipts, and Gmail token persist across restarts.
+This builds the image and runs the server with `config.yaml` and `data/`
+mounted from the project root so your database and receipts persist across
+restarts.
 
 To also run ngrok in a sidecar container, copy `.env.example` to `.env`,
 set `NGROK_AUTHTOKEN`, then:
@@ -294,11 +359,19 @@ Check `http://localhost:4040` for your public ngrok URL — put it in
 `config.yaml`'s `server.base_url` and Twilio's webhook config, then restart
 (`docker compose restart tudget`) so the app picks up the new `base_url`.
 
+To also run the Android relay watchdog (step 3), add the
+`android-watchdog` profile:
+
+```bash
+docker compose --profile ngrok --profile android-watchdog up --build
+```
+
 ---
 
 On startup (either option), Tudget loads your categories from Notion, then
-starts three background loops: the Gmail poller, an hourly Notion category
-refresh, and the nightly Plaid reconciliation scheduler.
+starts two background loops: an hourly Notion category refresh and the
+nightly Plaid reconciliation scheduler. Bank app notifications arrive via
+the `/notification` webhook (no polling involved).
 
 Check `http://localhost:8000/health` to confirm it's up.
 
@@ -315,8 +388,8 @@ curl -X POST http://localhost:8000/reconcile
 
 This fetches the last 24h of Plaid transactions for every configured
 account, marks matching SQLite transactions as reconciled, inserts any
-transactions email parsing missed (syncing them to Notion), and texts you
-a summary.
+transactions notification parsing missed (syncing them to Notion), and
+texts you a summary.
 
 ---
 

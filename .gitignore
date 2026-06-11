@@ -1,8 +1,10 @@
 # Secrets / local config
 config.yaml
-credentials.json
-token.json
 .env
+
+# adb key pair for the android-watchdog service
+watchdog/android/*
+!watchdog/android/.gitkeep
 
 # Data
 data/*.db
@@ -11,7 +13,7 @@ data/*.db-wal
 data/*.db-shm
 data/receipts/*
 !data/receipts/.gitkeep
-data/unparsed_emails.log
+data/unparsed_notifications.log
 
 # Python
 __pycache__/

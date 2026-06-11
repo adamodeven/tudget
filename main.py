@@ -1,21 +1,24 @@
-"""FastAPI app: Twilio webhook, manual reconciliation trigger, and the
-background jobs that tie everything together (Gmail polling, hourly
-category refresh from Notion, nightly Plaid reconciliation)."""
+"""FastAPI app: Twilio webhook, the Android relay device's notification
+webhook, manual reconciliation trigger, and the background jobs that tie
+everything together (hourly category refresh from Notion, nightly Plaid
+reconciliation)."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Form, Response
+from fastapi import BackgroundTasks, FastAPI, Form, Header, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 
 import db
-import gmail_poller
+import notification_parsers
 import notion_sync
 import plaid_client
 import twilio_client as twilio_client_module
@@ -24,19 +27,31 @@ from config import load_config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+UNPARSED_LOG = Path(__file__).parent / "data" / "unparsed_notifications.log"
+
 config = load_config()
 twilio_client = twilio_client_module.TwilioClient(config)
 notion = notion_sync.get_notion_client(config)
 
 
+class NotificationPayload(BaseModel):
+    """Body posted by the relay device's notification-forwarder app for
+    each bank app notification (see README's "Android relay device"
+    section)."""
+
+    package: str
+    title: str = ""
+    text: str = ""
+
+
 async def on_new_transaction(parsed: dict) -> None:
-    """Called by the Gmail poller for each newly parsed bank alert."""
+    """Called for each newly parsed bank app notification."""
     transaction_id = db.insert_transaction(
         merchant=parsed["merchant"],
         amount=parsed["amount"],
         card=parsed["card"],
         timestamp=datetime.now().isoformat(),
-        source="email",
+        source="notification",
     )
     db.create_pending_categorization(transaction_id, config.phone.my_number)
 
@@ -45,6 +60,12 @@ async def on_new_transaction(parsed: dict) -> None:
         parsed["card"], parsed["merchant"], parsed["amount"], categories
     )
     twilio_client.send_sms(config.phone.my_number, message)
+
+
+def _log_unparsed_notification(package: str, title: str, text: str) -> None:
+    UNPARSED_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(UNPARSED_LOG, "a") as f:
+        f.write(f"--- Package: {package}\nTitle: {title}\n\n{text}\n\n")
 
 
 async def category_refresh_loop() -> None:
@@ -80,7 +101,6 @@ async def lifespan(app: FastAPI):
     logger.info("Loaded %d categories from Notion", len(categories))
 
     tasks = [
-        asyncio.create_task(gmail_poller.poll_loop(config, on_new_transaction)),
         asyncio.create_task(category_refresh_loop()),
         asyncio.create_task(reconciliation_scheduler()),
     ]
@@ -128,6 +148,39 @@ async def sms_webhook(
 
     twiml.message(reply_text)
     return Response(content=str(twiml), media_type="application/xml")
+
+
+@app.post("/notification")
+async def notification_webhook(
+    payload: NotificationPayload,
+    x_tudget_secret: str = Header(default=""),
+) -> dict:
+    """Receives bank app push notifications forwarded from the Android
+    relay device (see README's "Android relay device" section)."""
+    if x_tudget_secret != config.notification.shared_secret:
+        raise HTTPException(status_code=401, detail="invalid secret")
+
+    bank_key = config.notification.apps.get(payload.package)
+    if bank_key is None:
+        return {"status": "ignored"}
+
+    notification_hash = hashlib.sha256(
+        f"{payload.package}|{payload.title}|{payload.text}".encode()
+    ).hexdigest()
+    if db.is_notification_processed(notification_hash):
+        return {"status": "duplicate"}
+    db.mark_notification_processed(notification_hash)
+
+    parser = notification_parsers.BANK_PARSERS.get(bank_key)
+    parsed = parser(payload.title, payload.text) if parser else None
+
+    if parsed is None:
+        logger.warning("Could not parse notification from %s", payload.package)
+        _log_unparsed_notification(payload.package, payload.title, payload.text)
+        return {"status": "unparsed"}
+
+    await on_new_transaction(parsed)
+    return {"status": "ok"}
 
 
 @app.post("/reconcile")

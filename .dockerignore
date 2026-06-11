@@ -7,6 +7,5 @@ __pycache__/
 
 # Secrets and local data are mounted as volumes, not baked into the image.
 config.yaml
-credentials.json
-token.json
 data/
+watchdog/

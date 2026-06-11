@@ -1,7 +1,7 @@
 """Nightly reconciliation: pulls the last 24h of transactions from Plaid
 across all configured accounts, cross-references them against SQLite by
-amount + merchant + date, and texts a summary of anything email parsing
-missed.
+amount + merchant + date, and texts a summary of anything notification
+parsing missed.
 
 Matched transactions are marked reconciled in SQLite (and in Notion, if
 they'd already been categorized and synced). Missed transactions are
@@ -98,7 +98,7 @@ def run_reconciliation(config: AppConfig, twilio_client) -> dict:
 
     if missed:
         lines = "\n".join(f"- {m['card']}: {m['merchant']} ${m['amount']:.2f}" for m in missed)
-        message = f"Nightly check found {len(missed)} transaction(s) email parsing missed:\n{lines}"
+        message = f"Nightly check found {len(missed)} transaction(s) notification parsing missed:\n{lines}"
     else:
         message = f"Nightly check: all caught up, {matched_count} transaction(s) verified."
 

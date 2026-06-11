@@ -5,8 +5,6 @@ services:
       - "8000:8000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - ./credentials.json:/app/credentials.json:ro
-      - ./token.json:/app/token.json
       - ./data:/app/data
     restart: unless-stopped
 
@@ -22,4 +20,20 @@ services:
       - "4040:4040" # ngrok web UI: shows your public URL
     depends_on:
       - tudget
+    restart: unless-stopped
+
+  # Optional: keeps the tethered Android relay device's notification
+  # forwarder app alive over USB via adb (whitelists it from battery
+  # optimization, relaunches it if killed). Requires a USB data connection
+  # between the device and this host. Run with:
+  #   docker compose --profile android-watchdog up -d --build
+  android-watchdog:
+    build: ./watchdog
+    profiles: ["android-watchdog"]
+    privileged: true # needed for USB device passthrough (adb)
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - ./watchdog/android:/root/.android # persists the adb key pair across restarts
+    environment:
+      - FORWARDER_PACKAGE=${FORWARDER_PACKAGE:-com.arlosoft.macrodroid}
     restart: unless-stopped

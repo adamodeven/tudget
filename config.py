@@ -24,11 +24,18 @@ class PhoneConfig(BaseModel):
     my_number: str
 
 
-class GmailConfig(BaseModel):
-    credentials_file: str = "credentials.json"
-    token_file: str = "token.json"
-    poll_interval_seconds: int = 60
-    label: str = "INBOX"
+class NotificationConfig(BaseModel):
+    """Auth + routing for the /notification endpoint, which receives bank
+    app push notifications forwarded from the Android relay device (see
+    README's "Android relay device" section)."""
+
+    # Shared secret the relay device's notification-forwarder app must send
+    # in the X-Tudget-Secret header. Generate any random string.
+    shared_secret: str
+    # Maps each bank app's Android package name to a parser key
+    # (chase/sofi/fidelity/venmo) in notification_parsers.BANK_PARSERS.
+    # Notifications from apps not listed here are ignored.
+    apps: dict[str, str] = Field(default_factory=dict)
 
 
 class TwilioConfig(BaseModel):
@@ -66,12 +73,11 @@ class ReceiptsConfig(BaseModel):
 class AppConfig(BaseModel):
     server: ServerConfig
     phone: PhoneConfig
-    gmail: GmailConfig
+    notification: NotificationConfig
     twilio: TwilioConfig
     notion: NotionConfig
     plaid: PlaidConfig
     receipts: ReceiptsConfig = Field(default_factory=ReceiptsConfig)
-    bank_senders: dict[str, str] = Field(default_factory=dict)
 
 
 def load_config(path: Path | str = CONFIG_PATH) -> AppConfig:

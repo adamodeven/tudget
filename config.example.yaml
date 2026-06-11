@@ -15,15 +15,22 @@ phone:
   # number are ignored.
   my_number: "+15555550123"
 
-gmail:
-  # OAuth client secret JSON downloaded from Google Cloud Console
-  # (Desktop app credentials).
-  credentials_file: "credentials.json"
-  # Created automatically the first time you authenticate.
-  token_file: "token.json"
-  poll_interval_seconds: 60
-  # Gmail label to search within (INBOX is fine for most setups).
-  label: "INBOX"
+# Auth + routing for push notifications forwarded from your Android relay
+# device (see README's "Android relay device" section).
+notification:
+  # Shared secret the device's notification-forwarder app sends in the
+  # X-Tudget-Secret header. Generate any random string, e.g.:
+  #   python -c "import secrets; print(secrets.token_hex(24))"
+  shared_secret: "change-me-to-a-random-string"
+  # Maps each bank app's Android package name to a parser key. Notifications
+  # from apps not listed here are ignored. Adjust if your bank's app uses a
+  # different package name (check the Play Store URL: play.google.com/store/
+  # apps/details?id=<package_name>).
+  apps:
+    com.chase.sig.android: chase
+    com.sofi.mobile: sofi
+    com.fidelity.android: fidelity
+    com.venmo: venmo
 
 twilio:
   account_sid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -64,11 +71,3 @@ plaid:
 
 receipts:
   storage_dir: "data/receipts"
-
-# Email senders used to recognize bank transaction-alert emails.
-# Adjust these if a bank uses a different alert address than the default.
-bank_senders:
-  chase: "no.reply.alerts@chase.com"
-  sofi: "noreply@sofi.com"
-  fidelity: "profile_email@fidelity.com"
-  venmo: "venmo@venmo.com"

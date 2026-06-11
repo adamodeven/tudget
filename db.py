@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     category TEXT,
     receipt_path TEXT,
     timestamp TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'email',
+    source TEXT NOT NULL DEFAULT 'notification',
     reconciled INTEGER NOT NULL DEFAULT 0,
     notion_page_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -47,8 +47,8 @@ CREATE TABLE IF NOT EXISTS pending_categorizations (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS processed_emails (
-    message_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS processed_notifications (
+    notification_hash TEXT PRIMARY KEY,
     processed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -126,22 +126,22 @@ def get_category(name: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
-# Processed emails (dedupe for the Gmail poller)
+# Processed notifications (dedupe for the /notification webhook)
 # ---------------------------------------------------------------------------
 
-def is_email_processed(message_id: str) -> bool:
+def is_notification_processed(notification_hash: str) -> bool:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT 1 FROM processed_emails WHERE message_id = ?", (message_id,)
+            "SELECT 1 FROM processed_notifications WHERE notification_hash = ?", (notification_hash,)
         ).fetchone()
         return row is not None
 
 
-def mark_email_processed(message_id: str) -> None:
+def mark_notification_processed(notification_hash: str) -> None:
     with get_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO processed_emails (message_id) VALUES (?)",
-            (message_id,),
+            "INSERT OR IGNORE INTO processed_notifications (notification_hash) VALUES (?)",
+            (notification_hash,),
         )
 
 
@@ -156,7 +156,7 @@ def insert_transaction(
     timestamp: str,
     category: str | None = None,
     receipt_path: str | None = None,
-    source: str = "email",
+    source: str = "notification",
     reconciled: bool = False,
     notion_page_id: str | None = None,
 ) -> int:
