@@ -22,14 +22,12 @@ services:
       - tudget
     restart: unless-stopped
 
-  # Optional: keeps the tethered Android relay device's notification
-  # forwarder app alive over USB via adb (whitelists it from battery
-  # optimization, relaunches it if killed). Requires a USB data connection
-  # between the device and this host. Run with:
-  #   docker compose --profile android-watchdog up -d --build
+  # Keeps the tethered Android relay device's notification forwarder app
+  # alive over USB via adb (whitelists it from battery optimization,
+  # relaunches it if killed). Requires a USB data connection between the
+  # device and this host. Runs by default with `docker compose up`.
   android-watchdog:
     build: ./watchdog
-    profiles: ["android-watchdog"]
     privileged: true # needed for USB device passthrough (adb)
     volumes:
       - /dev/bus/usb:/dev/bus/usb

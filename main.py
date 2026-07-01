@@ -100,10 +100,9 @@ async def lifespan(app: FastAPI):
     db.replace_categories(categories)
     logger.info("Loaded %d categories from Notion", len(categories))
 
-    tasks = [
-        asyncio.create_task(category_refresh_loop()),
-        asyncio.create_task(reconciliation_scheduler()),
-    ]
+    tasks = [asyncio.create_task(category_refresh_loop())]
+    if config.plaid.enabled:
+        tasks.append(asyncio.create_task(reconciliation_scheduler()))
     try:
         yield
     finally:
@@ -186,4 +185,6 @@ async def notification_webhook(
 @app.post("/reconcile")
 async def trigger_reconciliation() -> dict:
     """Manually runs the nightly reconciliation job (see README)."""
+    if not config.plaid.enabled:
+        raise HTTPException(status_code=503, detail="Plaid is disabled (set plaid.enabled: true in config.yaml)")
     return plaid_client.run_reconciliation(config, twilio_client)

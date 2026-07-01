@@ -47,27 +47,21 @@ notion:
   category_refresh_interval_seconds: 3600
 
 plaid:
-  client_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  # Set enabled: true and fill in credentials to turn on the nightly
+  # reconciliation safety net (catches purchases that notification parsing
+  # missed). Disabled by default — the rest of Tudget works without it.
+  enabled: false
+  client_id: ""
+  secret: ""
   environment: "sandbox" # sandbox | development | production
   # Hour (0-23, local server time) the nightly reconciliation job runs.
   reconciliation_hour: 2
-  accounts:
-    - name: "Chase Credit"
-      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    - name: "SoFi Credit"
-      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    - name: "SoFi Debit"
-      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    - name: "Fidelity Debit"
-      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    - name: "Venmo Credit"
-      access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-      account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  accounts: []
+  # When enabled, add one entry per account:
+  # accounts:
+  #   - name: "Chase Credit"
+  #     access_token: "access-sandbox-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  #     account_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 receipts:
   storage_dir: "data/receipts"

@@ -59,8 +59,9 @@ class PlaidAccountConfig(BaseModel):
 
 
 class PlaidConfig(BaseModel):
-    client_id: str
-    secret: str
+    enabled: bool = False
+    client_id: str = ""
+    secret: str = ""
     environment: str = "sandbox"
     reconciliation_hour: int = 2
     accounts: list[PlaidAccountConfig] = Field(default_factory=list)

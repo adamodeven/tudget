@@ -225,13 +225,13 @@ the forwarder app from battery optimization and relaunches it if it's been
 killed.
 
 ```bash
-docker compose --profile android-watchdog up -d --build
+docker compose up -d --build
 ```
 
-USB device passthrough means this service runs with elevated Docker
-permissions (`privileged: true` — see `docker-compose.yml`). If your
-forwarder app isn't MacroDroid, copy `.env.example` to `.env` and set
-`FORWARDER_PACKAGE` to its package name.
+The watchdog runs by default — no extra flags needed. USB device passthrough
+requires elevated Docker permissions (`privileged: true` — see
+`docker-compose.yml`). If your forwarder app isn't MacroDroid, copy
+`.env.example` to `.env` and set `FORWARDER_PACKAGE` to its package name.
 
 ### Tuning the notification parsers
 
@@ -255,7 +255,13 @@ what your bank's app actually sends.
 
 ---
 
-## 5. Plaid setup (nightly reconciliation)
+## 5. Plaid setup (nightly reconciliation — optional)
+
+Plaid is disabled by default (`plaid.enabled: false` in `config.yaml`).
+Skip this step to start — you can add it later once everything else is
+working. When enabled, a nightly job at 2am pulls the last 24h of
+transactions and texts you a summary of anything notification parsing
+missed.
 
 1. Create a [Plaid](https://dashboard.plaid.com) account and grab your
    **sandbox** `client_id` and `secret`.
@@ -359,11 +365,10 @@ Check `http://localhost:4040` for your public ngrok URL — put it in
 `config.yaml`'s `server.base_url` and Twilio's webhook config, then restart
 (`docker compose restart tudget`) so the app picks up the new `base_url`.
 
-To also run the Android relay watchdog (step 3), add the
-`android-watchdog` profile:
+To also run ngrok and the watchdog together:
 
 ```bash
-docker compose --profile ngrok --profile android-watchdog up --build
+docker compose --profile ngrok up --build
 ```
 
 ---
