@@ -46,9 +46,15 @@ class TwilioConfig(BaseModel):
 
 class NotionConfig(BaseModel):
     api_key: str
-    categories_db_id: str
-    transactions_db_id: str
-    budget_summary_db_id: str
+    # The Notion page under which the three databases are created automatically
+    # on first run if the IDs below are blank. Share this page with your
+    # integration before starting the server.
+    parent_page_id: str = ""
+    # Leave these blank to auto-create; or set them if you created the
+    # databases yourself.
+    categories_db_id: str = ""
+    transactions_db_id: str = ""
+    budget_summary_db_id: str = ""
     category_refresh_interval_seconds: int = 3600
 
 

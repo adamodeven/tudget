@@ -40,9 +40,15 @@ twilio:
 
 notion:
   api_key: "secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  categories_db_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  transactions_db_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  budget_summary_db_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  # Notion page under which the three databases (Categories, Transactions,
+  # Budget Summary) are created automatically on first run. Open the page
+  # in Notion and copy the 32-char ID from the URL.
+  parent_page_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  # Leave these blank — filled in automatically after first run.
+  # Set them manually if you prefer to create the databases yourself.
+  categories_db_id: ""
+  transactions_db_id: ""
+  budget_summary_db_id: ""
   # How often (seconds) to re-read the Categories DB for budget changes.
   category_refresh_interval_seconds: 3600
 

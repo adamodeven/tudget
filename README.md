@@ -98,45 +98,21 @@ even if you run the server itself with Docker.
 1. Create an internal integration at
    [notion.so/my-integrations](https://www.notion.so/my-integrations) and
    copy its API key into `config.yaml` under `notion.api_key`.
-2. Create three databases (as full-page databases, anywhere in your
-   workspace) with exactly these properties:
+2. Create a new page anywhere in your workspace — this is the parent page
+   that the three Tudget databases will be created under on first run.
+3. Click **Share** → **Connections** on that page and add your integration.
+4. Open the page and copy the 32-character ID from the URL
+   (`notion.so/yourworkspace/<PAGE_ID>`) into `config.yaml` under
+   `notion.parent_page_id`.
 
-   **Categories**
-   | Property | Type |
-   | --- | --- |
-   | Name | Title |
-   | Monthly Limit | Number |
-   | Emoji | Text |
+On first run, Tudget creates the Categories, Transactions, and Budget
+Summary databases automatically under that page and writes their IDs back
+into `config.yaml`. You don't need to create or configure the databases by
+hand.
 
-   This is the database you edit to set your budget. Tudget reads it on
-   startup and refreshes every hour (`notion.category_refresh_interval_seconds`).
-
-   **Transactions**
-   | Property | Type |
-   | --- | --- |
-   | Merchant | Title |
-   | Amount | Number |
-   | Card | Select |
-   | Category | Select |
-   | Receipt | Files & media |
-   | Timestamp | Date |
-   | Reconciled | Checkbox |
-
-   **Budget Summary**
-   | Property | Type |
-   | --- | --- |
-   | Category | Title |
-   | Spent | Number |
-   | Limit | Number |
-   | Remaining | Number |
-   | % Used | Number (format as "Percent" if you want it to display as a %) |
-
-3. For each database, click **Share** → **Connections** and add your
-   integration.
-4. Open each database as a full page and copy the 32-character ID out of
-   the URL (`notion.so/yourworkspace/<DATABASE_ID>?v=...`) into
-   `config.yaml` under `notion.categories_db_id`,
-   `notion.transactions_db_id`, and `notion.budget_summary_db_id`.
+**Categories** is the database you edit to control your budget — Tudget
+reads it on startup and refreshes it every hour. **Transactions** and
+**Budget Summary** are written by Tudget and are read-only from your side.
 
 ---
 

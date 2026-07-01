@@ -96,6 +96,8 @@ async def reconciliation_scheduler() -> None:
 async def lifespan(app: FastAPI):
     db.init_db()
 
+    notion_sync.ensure_databases(notion, config)
+
     categories = notion_sync.fetch_categories(notion, config.notion.categories_db_id)
     db.replace_categories(categories)
     logger.info("Loaded %d categories from Notion", len(categories))

@@ -105,6 +105,7 @@ def main() -> None:
 
     print("\nWriting categories to Notion...")
     client = notion_sync.get_notion_client(config)
+    notion_sync.ensure_databases(client, config)
     notion_sync.upsert_categories(client, config.notion.categories_db_id, categories)
 
     db.init_db()
