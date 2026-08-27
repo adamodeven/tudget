@@ -2,34 +2,52 @@
 #
 # Copy this file to config.yaml and fill in your real values.
 # config.yaml is gitignored and must never be committed.
+#
+# Only Notion + one messaging channel (twilio or imessage) are required to
+# run Tudget -- Gmail (bank email alerts) and Plaid (nightly reconciliation)
+# are optional automation you can turn on later. See README for details.
 
 server:
   host: "0.0.0.0"
   port: 8000
-  # Public URL that reaches this server (your ngrok URL). Used for the
-  # Twilio webhook and for linking receipt photos into Notion.
+  # Public URL that reaches this server (your ngrok URL, or your
+  # BlueBubbles Mac's tunnel). Used for the inbound webhook and for
+  # linking receipt photos into Notion.
   base_url: "https://your-subdomain.ngrok-free.app"
 
+# Which channel Tudget uses to text you. "twilio" (SMS/MMS, works anywhere,
+# needs a Twilio account) or "imessage" (needs a Mac running BlueBubbles --
+# see the iMessage section in README before choosing this).
+messaging:
+  channel: "twilio" # "twilio" | "imessage"
+
 phone:
-  # Your phone number in E.164 format. Incoming texts from any other
-  # number are ignored.
+  # Required when messaging.channel is "twilio". Your phone number in
+  # E.164 format. Incoming texts from any other number are ignored.
   my_number: "+15555550123"
 
-gmail:
-  # OAuth client secret JSON downloaded from Google Cloud Console
-  # (Desktop app credentials).
-  credentials_file: "credentials.json"
-  # Created automatically the first time you authenticate.
-  token_file: "token.json"
-  poll_interval_seconds: 60
-  # Gmail label to search within (INBOX is fine for most setups).
-  label: "INBOX"
-
 twilio:
+  # Required when messaging.channel is "twilio".
   account_sid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   auth_token: "your_twilio_auth_token"
   # The Twilio number that texts you and receives your replies.
   from_number: "+15555550100"
+
+imessage:
+  # Required when messaging.channel is "imessage". BlueBubbles Server URL
+  # (its local address, or a Tailscale/ngrok URL to it) and the server
+  # password you set in BlueBubbles.
+  server_url: "http://localhost:1234"
+  password: "your-bluebubbles-server-password"
+  # The phone number or email allowed to text the bot -- i.e. yours.
+  my_handle: "+15555550123"
+
+# All budgets/limits and cross-category totals are tracked in this
+# currency; purchases made in other currencies (a manual entry like
+# "€12,47 lunch", a screenshot in GBP, a Plaid transaction abroad) are
+# converted to it using live FX rates.
+currency:
+  default_currency: "USD"
 
 notion:
   api_key: "secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -39,7 +57,28 @@ notion:
   # How often (seconds) to re-read the Categories DB for budget changes.
   category_refresh_interval_seconds: 3600
 
+# Optional: real-time transaction detection from bank alert emails. Off by
+# default -- Tudget is fully usable via manual text/screenshot entry alone.
+# Set enabled: true once you've followed the Gmail setup steps in README.
+gmail:
+  enabled: false
+  credentials_file: "credentials.json"
+  token_file: "token.json"
+  poll_interval_seconds: 60
+  label: "INBOX"
+
+# Email senders used to recognize bank transaction-alert emails (only
+# needed if gmail.enabled is true).
+bank_senders:
+  chase: "no.reply.alerts@chase.com"
+  sofi: "noreply@sofi.com"
+  fidelity: "profile_email@fidelity.com"
+  venmo: "venmo@venmo.com"
+
+# Optional: nightly cross-check against your linked bank accounts for
+# anything email parsing missed. Off by default, same reasoning as gmail.
 plaid:
+  enabled: false
   client_id: "xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   environment: "sandbox" # sandbox | development | production
@@ -64,11 +103,3 @@ plaid:
 
 receipts:
   storage_dir: "data/receipts"
-
-# Email senders used to recognize bank transaction-alert emails.
-# Adjust these if a bank uses a different alert address than the default.
-bank_senders:
-  chase: "no.reply.alerts@chase.com"
-  sofi: "noreply@sofi.com"
-  fidelity: "profile_email@fidelity.com"
-  venmo: "venmo@venmo.com"

@@ -7,6 +7,9 @@ Run with: python setup_budget.py
 
 from __future__ import annotations
 
+import re
+
+import currency
 import db
 import notion_sync
 from config import load_config
@@ -30,9 +33,10 @@ GROUP_LABELS = {
 }
 
 
-def prompt_take_home() -> float:
+def prompt_take_home(default_currency: str) -> float:
     while True:
-        raw = input("What's your monthly take-home pay? $").strip().replace(",", "").replace("$", "")
+        raw = input(f"What's your monthly take-home pay ({default_currency})? ").strip()
+        raw = re.sub(r"[^\d.]", "", raw)
         try:
             value = float(raw)
             if value > 0:
@@ -46,23 +50,26 @@ def suggest_limits(take_home: float) -> dict[str, float]:
     return {name: round(take_home * fraction) for name, _, _, fraction in DEFAULT_CATEGORIES}
 
 
-def print_limits(limits: dict[str, float], take_home: float) -> None:
+def print_limits(limits: dict[str, float], take_home: float, default_currency: str) -> None:
     print("\nMonthly budget:")
     current_group = None
     for name, emoji, group, _ in DEFAULT_CATEGORIES:
         if group != current_group:
             print(f"\n{GROUP_LABELS[group]}")
             current_group = group
-        print(f"  {emoji} {name:<14} ${limits[name]:,.0f}")
+        print(f"  {emoji} {name:<14} {currency.format_amount(limits[name], default_currency)}")
 
     total = sum(limits.values())
-    print(f"\nTotal: ${total:,.0f} (take-home: ${take_home:,.0f})")
+    print(
+        f"\nTotal: {currency.format_amount(total, default_currency)} "
+        f"(take-home: {currency.format_amount(take_home, default_currency)})"
+    )
 
 
-def review_limits(limits: dict[str, float], take_home: float) -> dict[str, float]:
+def review_limits(limits: dict[str, float], take_home: float, default_currency: str) -> dict[str, float]:
     limits = dict(limits)
     while True:
-        print_limits(limits, take_home)
+        print_limits(limits, take_home, default_currency)
         choice = input(
             "\nPress Enter to accept, type a category name to change its amount, or 'done' to save: "
         ).strip()
@@ -75,26 +82,28 @@ def review_limits(limits: dict[str, float], take_home: float) -> dict[str, float
             print(f"Unknown category: {choice!r}")
             continue
 
-        new_value = input(f"New monthly limit for {match} (currently ${limits[match]:,.0f}): $").strip()
+        current = currency.format_amount(limits[match], default_currency)
+        new_value = input(f"New monthly limit for {match} (currently {current}): ").strip()
         try:
-            limits[match] = round(float(new_value.replace(",", "")))
+            limits[match] = round(float(re.sub(r"[^\d.]", "", new_value)))
         except ValueError:
             print("Please enter a number.")
 
 
 def main() -> None:
     config = load_config()
+    default_currency = config.currency.default_currency
 
     print("Tudget budget setup")
     print("=" * 40)
-    take_home = prompt_take_home()
+    take_home = prompt_take_home(default_currency)
 
     limits = suggest_limits(take_home)
-    limits = review_limits(limits, take_home)
+    limits = review_limits(limits, take_home, default_currency)
 
     print(
-        f"\nNote: Savings (${limits['Savings']:,.0f}/mo) is shown for reference only "
-        "and isn't written to Notion as a spending category."
+        f"\nNote: Savings ({currency.format_amount(limits['Savings'], default_currency)}/mo) is shown for "
+        "reference only and isn't written to Notion as a spending category."
     )
 
     categories = [

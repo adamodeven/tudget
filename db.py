@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     merchant TEXT NOT NULL,
     amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    amount_default_currency REAL,
     card TEXT NOT NULL,
     category TEXT,
     receipt_path TEXT,
@@ -72,9 +74,25 @@ def get_connection() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Adds columns introduced after a database's first creation.
+    SQLite has no "ADD COLUMN IF NOT EXISTS", so each is checked first."""
+    if not _column_exists(conn, "transactions", "currency"):
+        conn.execute("ALTER TABLE transactions ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'")
+    if not _column_exists(conn, "transactions", "amount_default_currency"):
+        conn.execute("ALTER TABLE transactions ADD COLUMN amount_default_currency REAL")
+        conn.execute("UPDATE transactions SET amount_default_currency = amount WHERE amount_default_currency IS NULL")
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -154,20 +172,28 @@ def insert_transaction(
     amount: float,
     card: str,
     timestamp: str,
+    currency: str = "USD",
+    amount_default_currency: float | None = None,
     category: str | None = None,
     receipt_path: str | None = None,
     source: str = "email",
     reconciled: bool = False,
     notion_page_id: str | None = None,
 ) -> int:
+    if amount_default_currency is None:
+        amount_default_currency = amount
     with get_connection() as conn:
         cur = conn.execute(
             """
             INSERT INTO transactions
-                (merchant, amount, card, category, receipt_path, timestamp, source, reconciled, notion_page_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (merchant, amount, currency, amount_default_currency, card, category,
+                 receipt_path, timestamp, source, reconciled, notion_page_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (merchant, amount, card, category, receipt_path, timestamp, source, int(reconciled), notion_page_id),
+            (
+                merchant, amount, currency, amount_default_currency, card, category,
+                receipt_path, timestamp, source, int(reconciled), notion_page_id,
+            ),
         )
         return cur.lastrowid
 
@@ -190,11 +216,13 @@ def update_transaction(transaction_id: int, **fields: Any) -> None:
 
 
 def get_category_spent(category: str, year: int, month: int) -> float:
+    """Sum of amount_default_currency (i.e. converted to the configured
+    default currency) for a category this month."""
     month_str = f"{year:04d}-{month:02d}"
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT COALESCE(SUM(amount), 0) AS total
+            SELECT COALESCE(SUM(amount_default_currency), 0) AS total
             FROM transactions
             WHERE category = ? AND strftime('%Y-%m', timestamp) = ?
             """,
@@ -204,11 +232,13 @@ def get_category_spent(category: str, year: int, month: int) -> float:
 
 
 def get_month_total_spent(year: int, month: int) -> float:
+    """Sum of amount_default_currency across all categorized transactions
+    this month."""
     month_str = f"{year:04d}-{month:02d}"
     with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT COALESCE(SUM(amount), 0) AS total
+            SELECT COALESCE(SUM(amount_default_currency), 0) AS total
             FROM transactions
             WHERE category IS NOT NULL AND strftime('%Y-%m', timestamp) = ?
             """,

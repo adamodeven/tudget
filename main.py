@@ -1,6 +1,7 @@
-"""FastAPI app: Twilio webhook, manual reconciliation trigger, and the
-background jobs that tie everything together (Gmail polling, hourly
-category refresh from Notion, nightly Plaid reconciliation)."""
+"""FastAPI app: inbound-message webhooks (Twilio SMS or iMessage/BlueBubbles,
+per config), manual reconciliation trigger, and the background jobs that
+tie everything together (optional Gmail polling, hourly category refresh
+from Notion, optional nightly Plaid reconciliation)."""
 
 from __future__ import annotations
 
@@ -10,41 +11,50 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Form, Response
+from fastapi import BackgroundTasks, Body, FastAPI, Form, Response
 from fastapi.staticfiles import StaticFiles
 from twilio.twiml.messaging_response import MessagingResponse
 
+import currency
 import db
 import gmail_poller
+import imessage_client
+import inbound
+import messaging
 import notion_sync
 import plaid_client
-import twilio_client as twilio_client_module
 from config import load_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 config = load_config()
-twilio_client = twilio_client_module.TwilioClient(config)
+messaging_client = messaging.get_messaging_client(config)
 notion = notion_sync.get_notion_client(config)
 
 
 async def on_new_transaction(parsed: dict) -> None:
     """Called by the Gmail poller for each newly parsed bank alert."""
+    currency_code = parsed.get("currency") or config.currency.default_currency
+    amount_default = currency.convert(parsed["amount"], currency_code, config.currency.default_currency)
+
     transaction_id = db.insert_transaction(
         merchant=parsed["merchant"],
         amount=parsed["amount"],
+        currency=currency_code,
+        amount_default_currency=amount_default,
         card=parsed["card"],
         timestamp=datetime.now().isoformat(),
         source="email",
     )
-    db.create_pending_categorization(transaction_id, config.phone.my_number)
+    target = messaging.notify_target(config)
+    db.create_pending_categorization(transaction_id, target)
 
     categories = db.get_categories()
-    message = twilio_client_module.format_new_transaction_message(
-        parsed["card"], parsed["merchant"], parsed["amount"], categories
+    message = inbound.format_new_transaction_message(
+        parsed["card"], parsed["merchant"], parsed["amount"], currency_code, categories
     )
-    twilio_client.send_sms(config.phone.my_number, message)
+    messaging_client.send(target, message)
 
 
 async def category_refresh_loop() -> None:
@@ -66,7 +76,7 @@ async def reconciliation_scheduler() -> None:
             target += timedelta(days=1)
         await asyncio.sleep((target - now).total_seconds())
         try:
-            plaid_client.run_reconciliation(config, twilio_client)
+            plaid_client.run_reconciliation(config, messaging_client)
         except Exception:
             logger.exception("Nightly reconciliation failed")
 
@@ -79,11 +89,16 @@ async def lifespan(app: FastAPI):
     db.replace_categories(categories)
     logger.info("Loaded %d categories from Notion", len(categories))
 
-    tasks = [
-        asyncio.create_task(gmail_poller.poll_loop(config, on_new_transaction)),
-        asyncio.create_task(category_refresh_loop()),
-        asyncio.create_task(reconciliation_scheduler()),
-    ]
+    tasks = [asyncio.create_task(category_refresh_loop())]
+    if config.gmail.enabled:
+        tasks.append(asyncio.create_task(gmail_poller.poll_loop(config, on_new_transaction)))
+    else:
+        logger.info("Gmail polling is disabled (gmail.enabled: false) -- manual/screenshot entry only")
+    if config.plaid.enabled:
+        tasks.append(asyncio.create_task(reconciliation_scheduler()))
+    else:
+        logger.info("Plaid reconciliation is disabled (plaid.enabled: false)")
+
     try:
         yield
     finally:
@@ -112,15 +127,21 @@ async def sms_webhook(
 ) -> Response:
     twiml = MessagingResponse()
 
+    if config.messaging.channel != "twilio":
+        return Response(content=str(twiml), media_type="application/xml")
+
     if From != config.phone.my_number:
         logger.warning("Ignoring SMS from unrecognized number: %s", From)
         return Response(content=str(twiml), media_type="application/xml")
 
-    media_url = MediaUrl0 if int(NumMedia or "0") > 0 else None
-    categories = db.get_categories()
+    media_bytes = media_content_type = None
+    if int(NumMedia or "0") > 0 and MediaUrl0:
+        media_bytes, media_content_type = messaging_client.download_media(MediaUrl0)
 
-    reply_text, sync_info = twilio_client_module.handle_incoming_message(
-        From, Body, media_url, categories, twilio_client, config.receipts.storage_dir
+    categories = db.get_categories()
+    reply_text, sync_info = inbound.handle_incoming_message(
+        From, Body, media_bytes, media_content_type, categories,
+        config.receipts.storage_dir, config.currency.default_currency,
     )
 
     if sync_info:
@@ -130,7 +151,37 @@ async def sms_webhook(
     return Response(content=str(twiml), media_type="application/xml")
 
 
+@app.post("/imessage/webhook")
+async def imessage_webhook(background_tasks: BackgroundTasks, payload: dict = Body(...)) -> dict:
+    if config.messaging.channel != "imessage":
+        return {"ok": False}
+
+    event = imessage_client.parse_webhook_event(payload)
+    if event is None:
+        return {"ok": True}
+
+    if event["from"] != config.imessage.my_handle:
+        logger.warning("Ignoring iMessage from unrecognized handle: %s", event["from"])
+        return {"ok": True}
+
+    media_bytes = media_content_type = None
+    if event["media_url"]:
+        media_bytes, media_content_type = messaging_client.download_media(event["media_url"])
+
+    categories = db.get_categories()
+    reply_text, sync_info = inbound.handle_incoming_message(
+        event["from"], event["body"], media_bytes, media_content_type, categories,
+        config.receipts.storage_dir, config.currency.default_currency,
+    )
+
+    if sync_info:
+        background_tasks.add_task(notion_sync.sync_transaction, sync_info["transaction_id"], config)
+
+    messaging_client.send(event["from"], reply_text)
+    return {"ok": True}
+
+
 @app.post("/reconcile")
 async def trigger_reconciliation() -> dict:
     """Manually runs the nightly reconciliation job (see README)."""
-    return plaid_client.run_reconciliation(config, twilio_client)
+    return plaid_client.run_reconciliation(config, messaging_client)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -21,10 +21,20 @@ class ServerConfig(BaseModel):
 
 
 class PhoneConfig(BaseModel):
-    my_number: str
+    # Required only when messaging.channel is "twilio" -- the number
+    # allowed to text the bot, and the target for automated alerts.
+    my_number: str | None = None
+
+
+class MessagingConfig(BaseModel):
+    channel: str = "twilio"  # "twilio" (SMS/MMS) or "imessage" (see imessage_client.py)
 
 
 class GmailConfig(BaseModel):
+    # Off by default: Tudget is fully usable via manual text/screenshot
+    # entry alone. Turn this on once you've set up bank email alerts (see
+    # README) for automatic transaction detection.
+    enabled: bool = False
     credentials_file: str = "credentials.json"
     token_file: str = "token.json"
     poll_interval_seconds: int = 60
@@ -32,9 +42,15 @@ class GmailConfig(BaseModel):
 
 
 class TwilioConfig(BaseModel):
-    account_sid: str
-    auth_token: str
-    from_number: str
+    account_sid: str | None = None
+    auth_token: str | None = None
+    from_number: str | None = None
+
+
+class IMessageConfig(BaseModel):
+    server_url: str | None = None
+    password: str | None = None
+    my_handle: str | None = None
 
 
 class NotionConfig(BaseModel):
@@ -52,8 +68,11 @@ class PlaidAccountConfig(BaseModel):
 
 
 class PlaidConfig(BaseModel):
-    client_id: str
-    secret: str
+    # Off by default, same reasoning as gmail.enabled -- this is the
+    # nightly bank-reconciliation safety net, not required to use Tudget.
+    enabled: bool = False
+    client_id: str | None = None
+    secret: str | None = None
     environment: str = "sandbox"
     reconciliation_hour: int = 2
     accounts: list[PlaidAccountConfig] = Field(default_factory=list)
@@ -63,15 +82,52 @@ class ReceiptsConfig(BaseModel):
     storage_dir: str = "data/receipts"
 
 
+class CurrencyConfig(BaseModel):
+    # All budgets/limits and cross-category totals are tracked in this
+    # currency; purchases made in other currencies are converted to it
+    # (see currency.py) using live FX rates.
+    default_currency: str = "USD"
+
+
 class AppConfig(BaseModel):
     server: ServerConfig
-    phone: PhoneConfig
-    gmail: GmailConfig
-    twilio: TwilioConfig
+    phone: PhoneConfig = Field(default_factory=PhoneConfig)
+    messaging: MessagingConfig = Field(default_factory=MessagingConfig)
+    gmail: GmailConfig = Field(default_factory=GmailConfig)
+    twilio: TwilioConfig = Field(default_factory=TwilioConfig)
+    imessage: IMessageConfig = Field(default_factory=IMessageConfig)
     notion: NotionConfig
-    plaid: PlaidConfig
+    plaid: PlaidConfig = Field(default_factory=PlaidConfig)
     receipts: ReceiptsConfig = Field(default_factory=ReceiptsConfig)
+    currency: CurrencyConfig = Field(default_factory=CurrencyConfig)
     bank_senders: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_conditional_requirements(self) -> "AppConfig":
+        if self.messaging.channel == "twilio":
+            missing = [f for f in ("account_sid", "auth_token", "from_number") if not getattr(self.twilio, f)]
+            if not self.phone.my_number:
+                missing.append("phone.my_number")
+            if missing:
+                raise ValueError(
+                    f"messaging.channel is 'twilio' but these are not set: {', '.join(missing)}"
+                )
+        elif self.messaging.channel == "imessage":
+            missing = [f for f in ("server_url", "password", "my_handle") if not getattr(self.imessage, f)]
+            if missing:
+                raise ValueError(
+                    f"messaging.channel is 'imessage' but imessage.{missing[0]} is not set"
+                )
+        else:
+            raise ValueError(f"messaging.channel must be 'twilio' or 'imessage', got {self.messaging.channel!r}")
+
+        if self.gmail.enabled and not self.bank_senders:
+            raise ValueError("gmail.enabled is true but bank_senders is empty")
+
+        if self.plaid.enabled and (not self.plaid.client_id or not self.plaid.secret):
+            raise ValueError("plaid.enabled is true but plaid.client_id/secret are not set")
+
+        return self
 
 
 def load_config(path: Path | str = CONFIG_PATH) -> AppConfig:

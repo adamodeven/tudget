@@ -18,7 +18,9 @@ from plaid.api import plaid_api
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 
+import currency
 import db
+import messaging
 import notion_sync
 from config import AppConfig
 
@@ -45,7 +47,10 @@ def _receipt_url(txn: dict, config: AppConfig) -> str | None:
     return f"{config.server.base_url.rstrip('/')}/receipts/{txn['receipt_path']}"
 
 
-def run_reconciliation(config: AppConfig, twilio_client) -> dict:
+def run_reconciliation(config: AppConfig, messaging_client) -> dict:
+    if not config.plaid.enabled:
+        return {"error": "Plaid is not enabled (set plaid.enabled: true in config.yaml)"}
+
     plaid_client = get_plaid_client(config)
     notion = notion_sync.get_notion_client(config)
 
@@ -66,6 +71,7 @@ def run_reconciliation(config: AppConfig, twilio_client) -> dict:
 
         for plaid_txn in response["transactions"]:
             amount = float(plaid_txn["amount"])
+            currency_code = plaid_txn.get("iso_currency_code") or config.currency.default_currency
             merchant = plaid_txn["merchant_name"] or plaid_txn["name"]
             txn_date = str(plaid_txn["date"])
 
@@ -81,9 +87,12 @@ def run_reconciliation(config: AppConfig, twilio_client) -> dict:
                         )
                 continue
 
+            amount_default = currency.convert(amount, currency_code, config.currency.default_currency)
             transaction_id = db.insert_transaction(
                 merchant=merchant,
                 amount=amount,
+                currency=currency_code,
+                amount_default_currency=amount_default,
                 card=account.name,
                 timestamp=f"{txn_date}T00:00:00",
                 source="plaid",
@@ -97,11 +106,13 @@ def run_reconciliation(config: AppConfig, twilio_client) -> dict:
             missed.append(missed_txn)
 
     if missed:
-        lines = "\n".join(f"- {m['card']}: {m['merchant']} ${m['amount']:.2f}" for m in missed)
+        lines = "\n".join(
+            f"- {m['card']}: {m['merchant']} {currency.format_amount(m['amount'], m['currency'])}" for m in missed
+        )
         message = f"Nightly check found {len(missed)} transaction(s) email parsing missed:\n{lines}"
     else:
         message = f"Nightly check: all caught up, {matched_count} transaction(s) verified."
 
-    twilio_client.send_sms(config.phone.my_number, message)
+    messaging_client.send(messaging.notify_target(config), message)
 
     return {"matched": matched_count, "missed": len(missed), "message": message}

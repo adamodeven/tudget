@@ -121,6 +121,7 @@ def _transaction_properties(txn: dict, receipt_url: str | None) -> dict:
     properties: dict = {
         "Merchant": {"title": [{"text": {"content": txn["merchant"]}}]},
         "Amount": {"number": txn["amount"]},
+        "Currency": {"select": {"name": txn["currency"]}},
         "Card": {"select": {"name": txn["card"]}},
         "Timestamp": {"date": {"start": txn["timestamp"]}},
         "Reconciled": {"checkbox": bool(txn["reconciled"])},

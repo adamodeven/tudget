@@ -109,7 +109,7 @@ def parse_email(sender: str, subject: str, body: str, config: AppConfig) -> dict
     parser = BANK_PARSERS.get(bank_key)
     if parser is None:
         return None
-    return parser(subject, body)
+    return parser(subject, body, config.currency.default_currency)
 
 
 def _log_unparsed(sender: str, subject: str, body: str) -> None:
