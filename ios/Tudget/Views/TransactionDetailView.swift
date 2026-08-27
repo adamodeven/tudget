@@ -1,10 +1,7 @@
 import SwiftUI
 import SwiftData
-import UIKit
 
-/// The fast path for the app's most common chore: a transaction landed
-/// uncategorized (shared in, read off a screenshot), and all it needs is a tap.
-struct CategorizeSheet: View {
+struct TransactionDetailView: View {
 
     let transaction: Transaction
 
@@ -12,217 +9,243 @@ struct CategorizeSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
-    @Query(sort: [SortDescriptor(\BudgetCategory.sortOrder), SortDescriptor(\BudgetCategory.name)])
-    private var categories: [BudgetCategory]
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
 
-    @Query private var allTransactions: [Transaction]
-
-    @State private var confirmation: String?
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                VStack(spacing: 6) {
-                    Text(transaction.formattedAmount)
-                        .font(.system(size: 38, weight: .semibold, design: .rounded))
-                    Text(transaction.merchant)
-                        .font(.headline)
-                    if let home = transaction.formattedHomeAmount {
-                        Text("\(home) in \(settings.homeCurrency)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+        ScrollView {
+            VStack(spacing: Theme.Metric.cardSpacing) {
+                amountCard
+                categoryCard
+                if let filename = transaction.receiptFilename {
+                    receiptCard(filename)
                 }
-                .padding(.top, 12)
-
-                if let confirmation {
-                    Text(confirmation)
-                        .font(.subheadline)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(Color.tudgetAccent)
-                        .padding(.horizontal)
-                        .transition(.opacity)
-                }
-
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
-                        ForEach(categories) { category in
-                            Button {
-                                assign(category)
-                            } label: {
-                                Text(category.displayName)
-                                    .font(.subheadline.weight(.medium))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 16)
-                                    .background(
-                                        transaction.category?.uuid == category.uuid
-                                            ? Color.tudgetAccent
-                                            : Color(.secondarySystemGroupedBackground),
-                                        in: RoundedRectangle(cornerRadius: 12)
-                                    )
-                                    .foregroundStyle(
-                                        transaction.category?.uuid == category.uuid ? .white : .primary
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-
-                Spacer(minLength: 0)
+                detailsCard
+                deleteButton
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("Categorize")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Later") { dismiss() }
-                }
-            }
+            .padding(.horizontal, Theme.Metric.gutter)
+            .padding(.bottom, 90)
         }
-    }
-
-    /// Assigning shows the same "what's left" line the SMS version texted back,
-    /// then dismisses -- the number is the whole point of categorizing.
-    private func assign(_ category: BudgetCategory) {
-        transaction.category = category
-        transaction.syncedAt = nil
-        try? context.save()
-
-        let summary = BudgetCalculator.summary(
-            categories: categories.map {
-                BudgetCalculator.CategoryLimit(
-                    id: $0.uuid, name: $0.name, emoji: $0.emoji, monthlyLimit: $0.monthlyLimit
-                )
-            },
-            records: allTransactions.map {
-                BudgetCalculator.SpendRecord(
-                    categoryID: $0.category?.uuid,
-                    amountInHomeCurrency: $0.amountInHomeCurrency,
-                    timestamp: $0.timestamp
-                )
-            }
-        )
-
-        withAnimation {
-            confirmation = BudgetCalculator.confirmationLine(
-                for: category.uuid, summary: summary, homeCurrency: settings.homeCurrency
-            )
-        }
-
-        Task {
-            try? await Task.sleep(for: .seconds(1.6))
-            dismiss()
-        }
-    }
-}
-
-struct TransactionDetailView: View {
-
-    @Bindable var transaction: Transaction
-
-    @Environment(AppSettings.self) private var settings
-    @Environment(\.modelContext) private var context
-    @Environment(\.dismiss) private var dismiss
-
-    @Query(sort: [SortDescriptor(\BudgetCategory.sortOrder), SortDescriptor(\BudgetCategory.name)])
-    private var categories: [BudgetCategory]
-
-    @State private var amountText = ""
-    @State private var showingDeleteConfirm = false
-
-    var body: some View {
-        Form {
-            Section("Purchase") {
-                TextField("Merchant", text: $transaction.merchant)
-
-                HStack {
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                    Divider()
-                    CurrencyPicker(selection: $transaction.currencyCode)
-                        .labelsHidden()
-                }
-
-                DatePicker("When", selection: $transaction.timestamp, in: ...Date())
-            }
-
-            Section("Category") {
-                CategoryPicker(categories: categories, selection: $transaction.category)
-            }
-
-            Section("Details") {
-                LabeledContent("Source", value: transaction.source.label)
-                if transaction.currencyCode != settings.homeCurrency {
-                    LabeledContent(
-                        "In \(settings.homeCurrency)",
-                        value: Currency.format(
-                            transaction.amountInHomeCurrency, code: settings.homeCurrency
-                        )
-                    )
-                }
-                TextField("Note", text: Binding(
-                    get: { transaction.note ?? "" },
-                    set: { transaction.note = $0.isEmpty ? nil : $0 }
-                ), axis: .vertical)
-            }
-
-            if let filename = transaction.receiptFilename,
-               let data = SharedStore.receiptData(filename),
-               let image = UIImage(data: data) {
-                Section("Receipt") {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-            }
-
-            Section {
-                Button("Delete purchase", role: .destructive) {
-                    showingDeleteConfirm = true
-                }
-            }
-        }
-        .navigationTitle(transaction.merchant)
+        .background(AmbientBackground(tint: transaction.category?.tint.color ?? .blue))
+        .navigationTitle(transaction.displayMerchant)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            amountText = String(
-                format: "%.\(Currency.decimalPlaces(for: transaction.currencyCode))f",
-                transaction.amount
-            )
-        }
-        .onDisappear {
-            Task { await commitAmountIfChanged() }
-        }
         .confirmationDialog(
             "Delete this purchase?",
-            isPresented: $showingDeleteConfirm,
+            isPresented: $showingDeleteConfirmation,
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                LedgerActions.delete(transaction, in: context)
+                Ledger.delete(transaction, context: context)
                 dismiss()
             }
+        } message: {
+            Text("This can't be undone.")
         }
     }
 
-    /// The amount is edited as text, so it's written back (and re-converted)
-    /// only once, on the way out.
-    private func commitAmountIfChanged() async {
-        guard let parsed = CurrencyParser.parseNumber(amountText), parsed > 0 else { return }
-        guard parsed != transaction.amount
-            || transaction.homeCurrencyCode != settings.homeCurrency else {
-            try? context.save()
-            return
+    private var amountCard: some View {
+        VStack(spacing: 4) {
+            Text(transaction.formattedAmount)
+                .font(Theme.hero)
+                .minimumScaleFactor(0.5)
+                .lineLimit(1)
+
+            if let home = transaction.formattedHomeAmount {
+                Text("\(home) at the rate when it was logged")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
-        await LedgerActions.updateAmount(
-            transaction,
-            amount: parsed,
-            currencyCode: transaction.currencyCode,
-            in: context,
-            settings: settings
+        .frame(maxWidth: .infinity)
+        .glassCard()
+    }
+
+    private var categoryCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Category")
+                .font(.subheadline.weight(.semibold))
+
+            GlassEffectContainer(spacing: 8) {
+                FlowLayout(spacing: 8) {
+                    ForEach(categories) { category in
+                        let isSelected = transaction.category?.uuid == category.uuid
+                        Button {
+                            withAnimation(.smooth) {
+                                Ledger.categorize(
+                                    transaction,
+                                    as: isSelected ? nil : category,
+                                    context: context
+                                )
+                            }
+                        } label: {
+                            Text(category.displayName)
+                                .font(.subheadline)
+                                .fontWeight(isSelected ? .semibold : .regular)
+                                .glassChip(tint: category.tint.color, selected: isSelected)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private func receiptCard(_ filename: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Receipt")
+                .font(.subheadline.weight(.semibold))
+
+            if let url = AppGroup.receiptURL(for: filename),
+               let data = try? Data(contentsOf: url),
+               let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 320)
+                    .clipShape(.rect(cornerRadius: Theme.Metric.tightRadius))
+            } else {
+                Text("The image couldn't be loaded.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private var detailsCard: some View {
+        VStack(spacing: 10) {
+            StatRow(
+                label: "When",
+                value: transaction.timestamp.formatted(.dateTime.weekday().month().day().hour().minute())
+            )
+            Divider()
+            StatRow(label: "Added by", value: transaction.source.label)
+            if let note = transaction.note, !note.isEmpty {
+                Divider()
+                StatRow(label: "Note", value: note)
+            }
+        }
+        .glassCard()
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            showingDeleteConfirmation = true
+        } label: {
+            Label("Delete purchase", systemImage: "trash")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.glass)
+        .tint(.red)
+    }
+}
+
+/// One category's spend for a period, reached by tapping its dashboard tile.
+struct CategoryDetailView: View {
+
+    let categoryID: UUID
+    let period: BudgetPeriod
+
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.modelContext) private var context
+
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
+    @Query(sort: \Transaction.timestamp, order: .reverse) private var transactions: [Transaction]
+
+    private var category: BudgetCategory? {
+        categories.first { $0.uuid == categoryID }
+    }
+
+    private var items: [Transaction] {
+        transactions.filter {
+            $0.category?.uuid == categoryID && period.contains($0.timestamp)
+        }
+    }
+
+    private var budget: BudgetCalculator.CategoryBudget? {
+        BudgetCalculator.summary(
+            categories: Ledger.limits(from: categories),
+            records: Ledger.spendRecords(from: transactions),
+            period: period,
+            homeCurrency: settings.homeCurrencyCode
         )
+        .categories.first { $0.id == categoryID }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: Theme.Metric.cardSpacing) {
+                if let budget {
+                    header(budget)
+                }
+
+                if items.isEmpty {
+                    EmptyHint(
+                        systemImage: "tray",
+                        title: "Nothing here yet",
+                        message: "No purchases in this category this period."
+                    )
+                    .glassCard()
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(items) { transaction in
+                            NavigationLink {
+                                TransactionDetailView(transaction: transaction)
+                            } label: {
+                                TransactionRow(transaction: transaction)
+                            }
+                            .buttonStyle(.plain)
+
+                            if transaction.id != items.last?.id {
+                                Divider().padding(.leading, 44)
+                            }
+                        }
+                    }
+                    .glassCard(radius: Theme.Metric.tightRadius)
+                }
+            }
+            .padding(.horizontal, Theme.Metric.gutter)
+            .padding(.bottom, 90)
+        }
+        .background(AmbientBackground(tint: category?.tint.color ?? .blue))
+        .navigationTitle(category?.name ?? "Category")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func header(_ budget: BudgetCalculator.CategoryBudget) -> some View {
+        VStack(spacing: 12) {
+            ZStack {
+                BudgetRing(
+                    fraction: budget.fractionUsed,
+                    tint: budget.tint.color,
+                    lineWidth: 12,
+                    isOver: budget.isOverBudget
+                )
+                VStack(spacing: 0) {
+                    Text(budget.emoji.isEmpty ? "" : budget.emoji)
+                        .font(.title3)
+                    Text("\(Int(budget.rawFractionUsed * 100))%")
+                        .font(.headline)
+                        .monospacedDigit()
+                }
+            }
+            .frame(width: 110, height: 110)
+
+            Text(budget.isOverBudget
+                 ? "\(Currency.format(abs(budget.remaining), code: settings.homeCurrencyCode)) over"
+                 : "\(Currency.format(budget.remaining, code: settings.homeCurrencyCode)) left")
+                .font(Theme.title)
+                .foregroundStyle(budget.isOverBudget ? .red : .primary)
+
+            Text("\(Currency.formatCompact(budget.spent, code: settings.homeCurrencyCode)) of \(Currency.formatCompact(budget.limit, code: settings.homeCurrencyCode)) · \(period.formattedRange())")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .glassCard()
     }
 }

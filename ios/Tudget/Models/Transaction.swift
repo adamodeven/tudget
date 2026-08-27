@@ -1,33 +1,32 @@
 import Foundation
 import SwiftData
 
-/// How a transaction got into the ledger. Purely informational, but it's what
-/// tells you at a glance whether you typed something in or it came off a
-/// screenshot.
-enum TransactionSource: String, Codable, CaseIterable {
+/// How a purchase got into the ledger. Informational, but it's what tells you
+/// at a glance whether you typed something in or it came off a screenshot.
+enum TransactionSource: String, Codable, CaseIterable, Sendable {
     case manual
+    case quickEntry
     case screenshot
     case shareExtension
-    case email
-    case plaid
+    case imported
 
     var label: String {
         switch self {
         case .manual: return "Typed"
+        case .quickEntry: return "Quick entry"
         case .screenshot: return "Screenshot"
         case .shareExtension: return "Shared"
-        case .email: return "Bank email"
-        case .plaid: return "Bank sync"
+        case .imported: return "Imported"
         }
     }
 
     var systemImage: String {
         switch self {
         case .manual: return "keyboard"
+        case .quickEntry: return "bolt.fill"
         case .screenshot: return "camera.viewfinder"
         case .shareExtension: return "square.and.arrow.up"
-        case .email: return "envelope"
-        case .plaid: return "building.columns"
+        case .imported: return "antenna.radiowaves.left.and.right"
         }
     }
 }
@@ -37,47 +36,53 @@ enum TransactionSource: String, Codable, CaseIterable {
 /// `amount` and `currencyCode` are always the purchase as it actually
 /// happened; `amountInHomeCurrency` is that amount converted at log time and
 /// is what every budget total sums. Storing both means a €12.47 lunch always
-/// displays as €12.47 even though it counts against a USD budget, and that
-/// later FX moves don't silently rewrite past spending.
+/// displays as €12.47 even though it counts against a USD budget, and later FX
+/// moves don't silently rewrite past spending.
+///
+/// Every property has a default and the relationship is optional: that's what
+/// CloudKit requires of a SwiftData model, and retrofitting it later means a
+/// migration, so it's done up front whether or not sync is switched on yet.
 @Model
 final class Transaction {
 
-    @Attribute(.unique) var uuid: UUID
-    var merchant: String
-    var amount: Double
-    var currencyCode: String
-    var amountInHomeCurrency: Double
-    var homeCurrencyCode: String
-    var card: String
+    /// Stable identity across devices and across the share extension. Not a
+    /// `.unique` attribute -- CloudKit forbids those -- so de-duplication is
+    /// done by explicit lookup in `Ledger`.
+    var uuid: UUID = UUID()
+
+    var merchant: String = ""
+    var amount: Double = 0
+    var currencyCode: String = "USD"
+    var amountInHomeCurrency: Double = 0
+    var homeCurrencyCode: String = "USD"
+
     var category: BudgetCategory?
-    var receiptFilename: String?
+
     var note: String?
-    var timestamp: Date
-    var createdAt: Date
+    /// Filename inside the shared receipts directory, not a full path -- the
+    /// container URL differs between the app and its extensions.
+    var receiptFilename: String?
 
-    /// Backing store for `source`. SwiftData handles the raw string more
-    /// predictably across schema changes than an enum property.
-    var sourceRaw: String
+    var timestamp: Date = Date()
+    var createdAt: Date = Date()
 
-    /// Set once the transaction has been pushed to the optional backend, so
-    /// sync doesn't re-send it.
-    var syncedAt: Date?
+    /// Backing store for `source`. SwiftData handles a raw string more
+    /// predictably than an enum across schema changes.
+    var sourceRaw: String = TransactionSource.manual.rawValue
 
     init(
         uuid: UUID = UUID(),
-        merchant: String,
-        amount: Double,
-        currencyCode: String,
-        amountInHomeCurrency: Double,
-        homeCurrencyCode: String,
-        card: String = "Manual",
+        merchant: String = "",
+        amount: Double = 0,
+        currencyCode: String = "USD",
+        amountInHomeCurrency: Double = 0,
+        homeCurrencyCode: String = "USD",
         category: BudgetCategory? = nil,
-        receiptFilename: String? = nil,
         note: String? = nil,
+        receiptFilename: String? = nil,
         timestamp: Date = Date(),
         source: TransactionSource = .manual,
-        createdAt: Date = Date(),
-        syncedAt: Date? = nil
+        createdAt: Date = Date()
     ) {
         self.uuid = uuid
         self.merchant = merchant
@@ -85,14 +90,12 @@ final class Transaction {
         self.currencyCode = currencyCode
         self.amountInHomeCurrency = amountInHomeCurrency
         self.homeCurrencyCode = homeCurrencyCode
-        self.card = card
         self.category = category
-        self.receiptFilename = receiptFilename
         self.note = note
+        self.receiptFilename = receiptFilename
         self.timestamp = timestamp
         self.sourceRaw = source.rawValue
         self.createdAt = createdAt
-        self.syncedAt = syncedAt
     }
 
     var source: TransactionSource {
@@ -100,18 +103,22 @@ final class Transaction {
         set { sourceRaw = newValue.rawValue }
     }
 
+    var isCategorized: Bool { category != nil }
+
     /// The purchase in its original currency, e.g. "€12.47".
     var formattedAmount: String {
         Currency.format(amount, code: currencyCode)
     }
 
-    /// The same purchase in the home currency, e.g. "$13.47". Nil when the
-    /// purchase was already in the home currency and the conversion would just
-    /// repeat `formattedAmount`.
+    /// The converted amount, or nil when it would just repeat
+    /// `formattedAmount` because no conversion happened.
     var formattedHomeAmount: String? {
         guard currencyCode != homeCurrencyCode else { return nil }
         return Currency.format(amountInHomeCurrency, code: homeCurrencyCode)
     }
 
-    var isCategorized: Bool { category != nil }
+    var displayMerchant: String {
+        merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Unknown" : merchant
+    }
 }

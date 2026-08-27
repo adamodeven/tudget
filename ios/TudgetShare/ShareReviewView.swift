@@ -1,55 +1,60 @@
 import SwiftUI
+import SwiftData
 
-/// The share extension's whole UI: read the screenshot, show what was found,
-/// let the user fix it and pick a category, then queue it for the app.
+/// The share extension's whole UI: what was read, and which category it goes in.
+///
+/// Modelled on the old SMS exchange — here's what I think you spent, tell me
+/// what it was — because that flow only ever needed one decision from you, and
+/// tapping a category is faster than filling in a form.
 struct ShareReviewView: View {
 
-    let loadAttachment: () async -> ShareViewController.Attachment
-    let onComplete: () -> Void
+    let image: UIImage?
+    let onFinish: () -> Void
     let onCancel: () -> Void
 
-    private enum Stage {
-        case reading
-        case review
-        case saved
-        case failed(String)
-    }
+    @State private var settings = AppSettings.shared
+    @State private var context = ModelContext(LedgerStore.shared)
 
-    @State private var stage: Stage = .reading
+    @State private var categories: [BudgetCategory] = []
+    @State private var phase: Phase = .reading
     @State private var merchant = ""
     @State private var amountText = ""
-    @State private var currencyCode = AppSettings.homeCurrencyForExtension
-    @State private var selectedCategoryID: UUID?
-    @State private var image: UIImage?
-    @State private var imageData: Data?
-    @State private var rawText: String?
+    @State private var currencyCode = "USD"
+    @State private var pickedCategory: BudgetCategory?
+    @State private var confirmation: String?
 
-    private let categories = SharedStore.readCategorySnapshot()
-
-    private var amount: Double? { CurrencyParser.parseNumber(amountText) }
-    private var canSave: Bool {
-        (amount ?? 0) > 0 && !merchant.trimmingCharacters(in: .whitespaces).isEmpty
+    private enum Phase: Equatable {
+        case reading
+        case ready
+        case noAmount
+        case saving
     }
+
+    private var amount: Double { CurrencyParser.parseNumber(amountText) ?? 0 }
 
     var body: some View {
         NavigationStack {
             Group {
-                switch stage {
-                case .reading: readingView
-                case .review: reviewForm
-                case .saved: savedView
-                case .failed(let message): failedView(message)
+                if let confirmation {
+                    done(confirmation)
+                } else if phase == .reading {
+                    reading
+                } else {
+                    form
                 }
             }
-            .navigationTitle("Add to Tudget")
+            .background(backdrop)
+            .navigationTitle("Log a purchase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+                    Button("Cancel") { onCancel() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    if case .review = stage {
-                        Button("Save", action: save).disabled(!canSave)
+                if phase == .ready || phase == .noAmount {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { Task { await save() } }
+                            .disabled(amount <= 0)
+                            .buttonStyle(.glassProminent)
                     }
                 }
             }
@@ -57,187 +62,191 @@ struct ShareReviewView: View {
         .task { await load() }
     }
 
-    // MARK: - Stages
+    private var backdrop: some View {
+        ZStack {
+            Color(.systemBackground)
+            EllipticalGradient(
+                colors: [(pickedCategory?.tint.color ?? .blue).opacity(0.28), .clear],
+                center: .init(x: 0.2, y: 0.05),
+                startRadiusFraction: 0,
+                endRadiusFraction: 0.8
+            )
+        }
+        .ignoresSafeArea()
+    }
 
-    private var readingView: some View {
-        VStack(spacing: 14) {
+    private var reading: some View {
+        VStack(spacing: 12) {
             ProgressView()
-            Text("Reading…").font(.subheadline).foregroundStyle(.secondary)
+            Text("Reading the screenshot…")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var reviewForm: some View {
-        Form {
-            Section("Purchase") {
-                TextField("Merchant", text: $merchant)
-                    .textInputAutocapitalization(.words)
-                HStack {
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                    Divider()
-                    Picker("", selection: $currencyCode) {
-                        ForEach(Currency.pickerCodes(deviceCode: Currency.deviceCurrencyCode), id: \.self) {
-                            Text($0).tag($0)
-                        }
-                    }
-                    .labelsHidden()
+    private var form: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                if phase == .noAmount {
+                    Label(
+                        "I couldn't read an amount off that — type it in and it'll save just the same.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .glassEffect(.regular.tint(.orange.opacity(0.2)), in: .rect(cornerRadius: 18))
                 }
-            }
 
-            if !categories.isEmpty {
-                Section("Category") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
+                VStack(spacing: 10) {
+                    LabeledContent("Merchant") {
+                        TextField("Where", text: $merchant)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Divider()
+                    LabeledContent("Amount") {
+                        TextField("0", text: $amountText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .monospacedDigit()
+                    }
+                }
+                .font(.subheadline)
+                .padding(16)
+                .glassEffect(.regular, in: .rect(cornerRadius: 24))
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Category")
+                        .font(.subheadline.weight(.semibold))
+
+                    GlassEffectContainer(spacing: 10) {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 104), spacing: 10)],
+                            spacing: 10
+                        ) {
                             ForEach(categories) { category in
                                 Button {
-                                    selectedCategoryID =
-                                        selectedCategoryID == category.id ? nil : category.id
+                                    withAnimation(.smooth) {
+                                        pickedCategory =
+                                            pickedCategory?.uuid == category.uuid ? nil : category
+                                    }
                                 } label: {
-                                    Text(category.displayName)
-                                        .font(.subheadline.weight(.medium))
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 8)
-                                        .background(
-                                            selectedCategoryID == category.id
-                                                ? Color.accentColor
-                                                : Color.secondary.opacity(0.15),
-                                            in: Capsule()
-                                        )
-                                        .foregroundStyle(
-                                            selectedCategoryID == category.id ? .white : .primary
-                                        )
+                                    VStack(spacing: 3) {
+                                        Text(category.emoji.isEmpty ? "•" : category.emoji)
+                                        Text(category.name)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .glassEffect(
+                                        .regular.tint(
+                                            category.tint.color.opacity(
+                                                pickedCategory?.uuid == category.uuid ? 0.55 : 0.22
+                                            )
+                                        ).interactive(),
+                                        in: .rect(cornerRadius: 16)
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
-                        .padding(.vertical, 4)
                     }
-                }
-            }
 
-            if let image {
-                Section("Screenshot") {
+                    Text("Leave it blank and it'll wait for you in the app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
-                        .frame(maxHeight: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .frame(maxHeight: 130)
+                        .clipShape(.rect(cornerRadius: 16))
+                        .opacity(0.85)
                 }
             }
+            .padding(16)
         }
     }
 
-    private var savedView: some View {
-        VStack(spacing: 12) {
+    private func done(_ line: String) -> some View {
+        VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 48))
+                .font(.system(size: 50))
                 .foregroundStyle(.green)
-            Text("Saved to Tudget").font(.headline)
-            Text("It'll appear next time you open the app.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func failedView(_ message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.subheadline)
+                .symbolEffect(.bounce, value: line)
+            Text(line)
+                .font(.headline)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Close", action: onCancel)
+                .padding(.horizontal)
         }
-        .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Work
+    // MARK: - Actions
 
+    @MainActor
     private func load() async {
-        let attachment = await loadAttachment()
-        let home = AppSettings.homeCurrencyForExtension
+        currencyCode = settings.homeCurrencyCode
+        categories = Ledger.categories(in: context)
 
-        switch attachment {
-        case .image(let uiImage, let data):
-            image = uiImage
-            imageData = data
-
-            // `try?` flattens the optional return, so this is a single
-            // optional: nil means either OCR failed or it found no amount.
-            if let parsed = try? await VisionOCR.extractPurchase(
-                from: uiImage, defaultCurrency: home
-            ) {
-                apply(merchant: parsed.merchant, amount: parsed.amount,
-                      currency: parsed.currencyCode, rawText: parsed.rawText)
-            } else {
-                rawText = (try? await VisionOCR.recognizeText(in: uiImage))?
-                    .joined(separator: " ")
-            }
-            stage = .review
-
-        case .text(let text):
-            if let parsed = PurchaseTextParser.parseNotification(text, defaultCurrency: home) {
-                apply(merchant: parsed.merchant, amount: parsed.amount,
-                      currency: parsed.currencyCode, rawText: parsed.rawText)
-            } else {
-                rawText = text
-            }
-            stage = .review
-
-        case .empty:
-            stage = .failed("Nothing to read here — share a screenshot or some text.")
+        guard let image else {
+            phase = .noAmount
+            return
         }
-    }
 
-    private func apply(merchant: String?, amount: Double, currency: String, rawText: String?) {
-        self.merchant = merchant ?? ""
-        self.amountText = String(
-            format: "%.\(Currency.decimalPlaces(for: currency))f", amount
+        let purchase = try? await VisionOCR.extractPurchase(
+            from: image, defaultCurrency: settings.homeCurrencyCode
         )
-        self.currencyCode = currency
-        self.rawText = rawText
 
-        // Guess a category from the merchant, same as the in-app flow.
-        if let merchant,
-           let matched = CategoryMatcher.match(
-               merchant, in: categories.map(\.name), threshold: 0.9
-           ) {
-            selectedCategoryID = categories.first { $0.name == matched }?.id
+        if let purchase {
+            merchant = purchase.merchant ?? ""
+            amountText = String(format: "%.2f", purchase.amount)
+            currencyCode = purchase.currencyCode
+            if let name = CategoryMatcher.match(
+                purchase.merchant ?? "", in: categories.map(\.name), threshold: 0.85
+            ) {
+                pickedCategory = categories.first { $0.name == name }
+            }
+            phase = .ready
+        } else {
+            phase = .noAmount
         }
     }
 
-    private func save() {
-        guard let amount else { return }
+    @MainActor
+    private func save() async {
+        guard amount > 0 else { return }
+        phase = .saving
 
         var receiptFilename: String?
-        if let imageData {
-            receiptFilename = try? SharedStore.saveReceipt(imageData)
+        if let image, let data = image.jpegData(compressionQuality: 0.7) {
+            receiptFilename = AppGroup.saveReceipt(data)
         }
 
-        let purchase = PendingPurchase(
-            merchant: merchant.trimmingCharacters(in: .whitespaces),
+        await Ledger.record(
+            merchant: merchant.isEmpty ? "Unknown" : merchant,
             amount: amount,
             currencyCode: currencyCode,
-            categoryID: selectedCategoryID,
-            note: nil,
+            category: pickedCategory,
             receiptFilename: receiptFilename,
-            rawText: rawText
+            source: .shareExtension,
+            context: context,
+            settings: settings
         )
 
-        do {
-            try SharedStore.enqueue(purchase)
-            stage = .saved
-            Task {
-                try? await Task.sleep(for: .seconds(1.2))
-                onComplete()
-            }
-        } catch {
-            stage = .failed("Couldn't save: \(error.localizedDescription)")
-        }
+        let period = settings.period()
+        let summary = Ledger.summary(for: period, context: context, settings: settings)
+        confirmation = pickedCategory.map {
+            BudgetCalculator.confirmationLine(for: $0.uuid, summary: summary)
+        } ?? "Logged. Tell me what it was when you open Tudget."
+
+        try? await Task.sleep(for: .milliseconds(1500))
+        onFinish()
     }
 }

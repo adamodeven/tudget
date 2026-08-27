@@ -20,39 +20,25 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-
-	<!-- Read by AppGroup.identifier so the App Group is configured in exactly
-	     one place: APP_BUNDLE_ID in project.yml. -->
-	<key>TudgetAppGroupIdentifier</key>
-	<string>group.$(APP_BUNDLE_ID)</string>
-
-	<!-- Tudget uses no encryption beyond HTTPS, so TestFlight can skip the
-	     export-compliance prompt on every single upload. -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
 	<key>UILaunchScreen</key>
-	<dict>
-		<key>UIColorName</key>
-		<string></string>
-	</dict>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-	</dict>
+	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Automatic</string>
+
+	<!-- Attaching a receipt to a purchase. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pick a screenshot of a purchase notification, or attach a receipt photo to a purchase.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Snap a receipt to attach it to a purchase.</string>
+
+	<!-- Saves being asked about export compliance on every TestFlight upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

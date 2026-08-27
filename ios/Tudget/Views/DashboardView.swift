@@ -3,332 +3,307 @@ import SwiftData
 
 struct DashboardView: View {
 
-    @Binding var showingAddPurchase: Bool
-
     @Environment(AppSettings.self) private var settings
+    @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var context
 
-    @Query(sort: [SortDescriptor(\BudgetCategory.sortOrder), SortDescriptor(\BudgetCategory.name)])
-    private var categories: [BudgetCategory]
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
+    @Query(sort: \Transaction.timestamp, order: .reverse) private var transactions: [Transaction]
 
-    @Query(sort: \Transaction.timestamp, order: .reverse)
-    private var transactions: [Transaction]
+    /// 0 is the current period, -1 the one before, and so on.
+    @State private var periodOffset = 0
 
-    @State private var showingScreenshotImport = false
-    @State private var categorizing: Transaction?
+    private var period: BudgetPeriod {
+        settings.period(offsetBy: periodOffset)
+    }
 
-    private var summary: BudgetCalculator.MonthSummary {
+    private var summary: BudgetCalculator.PeriodSummary {
         BudgetCalculator.summary(
-            categories: categories.map {
-                BudgetCalculator.CategoryLimit(
-                    id: $0.uuid, name: $0.name, emoji: $0.emoji, monthlyLimit: $0.monthlyLimit
-                )
-            },
-            records: transactions.map {
-                BudgetCalculator.SpendRecord(
-                    categoryID: $0.category?.uuid,
-                    amountInHomeCurrency: $0.amountInHomeCurrency,
-                    timestamp: $0.timestamp
-                )
-            }
+            categories: Ledger.limits(from: categories),
+            records: Ledger.spendRecords(from: transactions),
+            period: period,
+            homeCurrency: settings.homeCurrencyCode
         )
     }
 
-    /// This month's transactions that still need a category -- the app's one
-    /// piece of outstanding work, so it sits at the top.
-    private var needsCategory: [Transaction] {
-        transactions.filter {
-            !$0.isCategorized && BudgetCalculator.isInMonth($0.timestamp, of: Date())
-        }
+    private var projection: RunwayProjection {
+        RunwayProjection.make(
+            period: period,
+            limit: summary.totalLimit,
+            records: Ledger.spendRecords(from: transactions),
+            homeCurrency: settings.homeCurrencyCode
+        )
     }
 
-    private var recent: [Transaction] {
-        Array(transactions.prefix(5))
+    private var uncategorized: [Transaction] {
+        transactions.filter { $0.category == nil && period.contains($0.timestamp) }
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
-                    MonthTotalCard(summary: summary, currencyCode: settings.homeCurrency)
+                VStack(spacing: Theme.Metric.cardSpacing) {
+                    periodHeader
+                    heroCard
 
-                    quickActions
-
-                    if !needsCategory.isEmpty {
+                    if !uncategorized.isEmpty {
                         needsCategorySection
                     }
 
-                    if categories.isEmpty {
-                        EmptyStateView(
-                            systemImage: "tray",
-                            title: "No categories yet",
-                            message: "Set up your budget in Settings to start tracking spend by category."
-                        )
-                    } else {
-                        categorySection
-                    }
-
-                    if !recent.isEmpty {
-                        recentSection
-                    }
+                    categorySection
                 }
-                .padding()
+                .padding(.horizontal, Theme.Metric.gutter)
+                .padding(.bottom, 90)
             }
-            .navigationTitle(monthTitle)
-            .background(Color(.systemGroupedBackground))
-            .sheet(isPresented: $showingScreenshotImport) {
-                ScreenshotImportView()
+            .background(AmbientBackground(tint: Theme.color(for: projection.pace)))
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .navigationTitle("Budget")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    // MARK: - Period header
+
+    private var periodHeader: some View {
+        HStack {
+            Button {
+                withAnimation(.smooth) { periodOffset -= 1 }
+            } label: {
+                Image(systemName: "chevron.left")
             }
-            .sheet(item: $categorizing) { transaction in
-                CategorizeSheet(transaction: transaction)
-            }
-        }
-    }
+            .buttonStyle(.glass)
 
-    private var monthTitle: String {
-        Date().formatted(.dateTime.month(.wide).year())
-    }
-
-    // MARK: - Sections
-
-    private var quickActions: some View {
-        HStack(spacing: 12) {
-            QuickActionButton(
-                title: "Add purchase",
-                systemImage: "plus.circle.fill",
-                action: { showingAddPurchase = true }
-            )
-            QuickActionButton(
-                title: "From screenshot",
-                systemImage: "camera.viewfinder",
-                action: { showingScreenshotImport = true }
-            )
-        }
-    }
-
-    private var needsCategorySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(
-                title: "Needs a category",
-                subtitle: "\(Currency.formatCompact(summary.uncategorizedSpent, code: settings.homeCurrency)) not counted yet"
-            )
-
-            VStack(spacing: 0) {
-                ForEach(needsCategory) { transaction in
-                    Button {
-                        categorizing = transaction
-                    } label: {
-                        TransactionRow(transaction: transaction, showsChevron: true)
-                    }
-                    .buttonStyle(.plain)
-
-                    if transaction.uuid != needsCategory.last?.uuid {
-                        Divider().padding(.leading, 16)
-                    }
-                }
-            }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        }
-    }
-
-    private var categorySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Categories")
-
-            VStack(spacing: 18) {
-                ForEach(summary.categories) { category in
-                    BudgetBar(
-                        title: category.displayName,
-                        spent: category.spent,
-                        limit: category.limit,
-                        fractionUsed: category.fractionUsed,
-                        isOver: category.isOverBudget,
-                        currencyCode: settings.homeCurrency
-                    )
-                }
-            }
-            .padding(16)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        }
-    }
-
-    private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Recent")
-
-            VStack(spacing: 0) {
-                ForEach(recent) { transaction in
-                    NavigationLink {
-                        TransactionDetailView(transaction: transaction)
-                    } label: {
-                        TransactionRow(transaction: transaction, showsChevron: true)
-                    }
-                    .buttonStyle(.plain)
-
-                    if transaction.uuid != recent.last?.uuid {
-                        Divider().padding(.leading, 16)
-                    }
-                }
-            }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        }
-    }
-}
-
-// MARK: - Pieces
-
-private struct MonthTotalCard: View {
-
-    let summary: BudgetCalculator.MonthSummary
-    let currencyCode: String
-
-    private var headline: String {
-        if summary.totalLimit == 0 {
-            return Currency.formatCompact(summary.totalSpent, code: currencyCode)
-        }
-        return Currency.formatCompact(abs(summary.totalRemaining), code: currencyCode)
-    }
-
-    private var caption: String {
-        if summary.totalLimit == 0 {
-            return "spent this month"
-        }
-        return summary.isOverBudget
-            ? "over your \(Currency.formatCompact(summary.totalLimit, code: currencyCode)) budget"
-            : "left of \(Currency.formatCompact(summary.totalLimit, code: currencyCode))"
-    }
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Text(headline)
-                .font(.system(size: 44, weight: .semibold, design: .rounded))
-                .foregroundStyle(summary.isOverBudget ? Color.tudgetOver : Color.primary)
-                .contentTransition(.numericText())
-
-            Text(caption)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if summary.totalLimit > 0 {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.secondary.opacity(0.15))
-                        Capsule()
-                            .fill(Color.budgetStatus(
-                                fractionUsed: summary.fractionUsed,
-                                isOver: summary.isOverBudget
-                            ))
-                            .frame(width: max(0, geometry.size.width * summary.fractionUsed))
-                    }
-                }
-                .frame(height: 10)
-                .padding(.top, 4)
-
-                Text("\(Currency.formatCompact(summary.totalSpent, code: currencyCode)) spent")
+            VStack(spacing: 2) {
+                Text(period.formattedRange())
+                    .font(.subheadline.weight(.semibold))
+                Text(periodOffset == 0 ? period.remainingDescription() : "Past period")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+
+            Button {
+                withAnimation(.smooth) { periodOffset += 1 }
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.glass)
+            .disabled(periodOffset >= 0)
+            .opacity(periodOffset >= 0 ? 0.4 : 1)
+        }
+    }
+
+    // MARK: - Hero
+
+    private var heroCard: some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 4) {
+                Text(summary.isOverBudget ? "Over budget by" : "Left to spend")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Text(Currency.format(abs(summary.totalRemaining), code: summary.homeCurrency))
+                    .font(Theme.hero)
+                    .foregroundStyle(summary.isOverBudget ? .red : .primary)
+                    .contentTransition(.numericText())
+                    .animation(.smooth, value: summary.totalRemaining)
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+
+                Text("of \(Currency.formatCompact(summary.totalLimit, code: summary.homeCurrency)) this period")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            spendBar
+
+            if periodOffset == 0 {
+                paceRow
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(20)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+        .glassCard()
     }
-}
 
-private struct QuickActionButton: View {
+    private var spendBar: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.quaternary)
 
-    let title: String
-    let systemImage: String
-    let action: () -> Void
+                Capsule()
+                    .fill(Theme.color(for: projection.pace).gradient)
+                    .frame(width: max(6, proxy.size.width * summary.fractionUsed))
+                    .animation(.smooth(duration: 0.5), value: summary.fractionUsed)
 
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.title2)
-                Text(title)
-                    .font(.footnote.weight(.medium))
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.tudgetAccent)
-    }
-}
-
-struct SectionHeader: View {
-
-    let title: String
-    var subtitle: String?
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(title)
-                .font(.headline)
-            Spacer()
-            if let subtitle {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // Where you'd be if you'd spent perfectly evenly. The gap
+                // between this and the fill is the whole story at a glance.
+                if periodOffset == 0, summary.totalLimit > 0 {
+                    Capsule()
+                        .fill(.primary.opacity(0.55))
+                        .frame(width: 2, height: 16)
+                        .offset(x: proxy.size.width * period.fractionElapsed())
+                }
             }
         }
+        .frame(height: 12)
     }
-}
 
-struct TransactionRow: View {
-
-    let transaction: Transaction
-    var showsChevron = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: transaction.source.systemImage)
+    private var paceRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: projection.pace == .onTrack
+                  ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            Text(projection.summarySentence())
                 .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Theme.color(for: projection.pace))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Needs a category
+
+    /// Carried over from the SMS flow: a purchase is logged the moment it
+    /// happens and told what it was afterwards, so capture is never blocked on
+    /// making a decision.
+    private var needsCategorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Needs a category", systemImage: "questionmark.circle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+
+            ForEach(uncategorized) { transaction in
+                Button {
+                    router.categorizing = transaction
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(transaction.displayMerchant)
+                                .font(.subheadline.weight(.medium))
+                            Text(transaction.timestamp, format: .dateTime.weekday().month().day())
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(transaction.formattedAmount)
+                            .font(Theme.figure)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+
+                if transaction.id != uncategorized.last?.id {
+                    Divider()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tintedGlassCard(.orange)
+    }
+
+    // MARK: - Categories
+
+    private var categorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Categories")
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
-                .background(Color.secondary.opacity(0.12), in: Circle())
+                .padding(.leading, 4)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(transaction.merchant)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-
-                HStack(spacing: 4) {
-                    Text(transaction.timestamp.formatted(.dateTime.month().day()))
-                    if let category = transaction.category {
-                        Text("·")
-                        Text(category.displayName).lineLimit(1)
-                    } else {
-                        Text("·")
-                        Text("Uncategorized").foregroundStyle(Color.tudgetWarning)
+            if summary.categories.isEmpty {
+                EmptyHint(
+                    systemImage: "square.grid.2x2",
+                    title: "No categories yet",
+                    message: "Add some in Settings to start tracking against a budget."
+                )
+                .glassCard()
+            } else {
+                // A container lets neighbouring glass cards blend into each
+                // other rather than each rendering its own hard edge.
+                GlassEffectContainer(spacing: Theme.Metric.cardSpacing) {
+                    LazyVGrid(
+                        columns: [GridItem(.flexible(), spacing: Theme.Metric.cardSpacing),
+                                  GridItem(.flexible(), spacing: Theme.Metric.cardSpacing)],
+                        spacing: Theme.Metric.cardSpacing
+                    ) {
+                        ForEach(summary.categories) { budget in
+                            NavigationLink {
+                                CategoryDetailView(categoryID: budget.id, period: period)
+                            } label: {
+                                CategoryTile(
+                                    budget: budget,
+                                    fractionElapsed: periodOffset == 0 ? period.fractionElapsed() : 1,
+                                    homeCurrency: summary.homeCurrency
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
+        }
+    }
+}
 
-            Spacer(minLength: 8)
+// MARK: - Category tile
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(transaction.formattedAmount)
-                    .font(.subheadline.weight(.semibold))
-                if let home = transaction.formattedHomeAmount {
-                    Text(home)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+struct CategoryTile: View {
+
+    let budget: BudgetCalculator.CategoryBudget
+    let fractionElapsed: Double
+    let homeCurrency: String
+
+    private var health: BudgetCalculator.BudgetHealth {
+        budget.health(fractionElapsed: fractionElapsed)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                ZStack {
+                    BudgetRing(
+                        fraction: budget.fractionUsed,
+                        tint: budget.tint.color,
+                        lineWidth: 7,
+                        isOver: budget.isOverBudget
+                    )
+                    Text(budget.emoji.isEmpty ? "•" : budget.emoji)
+                        .font(.system(size: 15))
+                }
+                .frame(width: 42, height: 42)
+
+                Spacer(minLength: 0)
+
+                if health == .over || health == .critical {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(Theme.color(for: health))
+                        .font(.footnote)
                 }
             }
 
-            if showsChevron {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(budget.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+
+                Text(budget.isOverBudget
+                     ? "\(Currency.formatCompact(abs(budget.remaining), code: homeCurrency)) over"
+                     : "\(Currency.formatCompact(budget.remaining, code: homeCurrency)) left")
+                    .font(.footnote)
+                    .foregroundStyle(budget.isOverBudget ? .red : .secondary)
+                    .contentTransition(.numericText())
+
+                Text("of \(Currency.formatCompact(budget.limit, code: homeCurrency))")
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(16)
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tintedGlassCard(budget.tint.color, radius: Theme.Metric.tightRadius)
     }
 }

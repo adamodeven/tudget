@@ -1,34 +1,21 @@
-# Secrets / local config
-config.yaml
-credentials.json
-token.json
-
-# Data
-data/*.db
-data/*.db-journal
-data/*.db-wal
-data/*.db-shm
-data/receipts/*
-!data/receipts/.gitkeep
-data/unparsed_emails.log
+# Secrets — never commit
+server/config.yaml
 
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-*.egg-info/
 
-# iOS / Xcode
-# The project is generated from ios/project.yml by XcodeGen -- see ios/README.md.
+# Server data
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+
+# Xcode / generated
 ios/Tudget.xcodeproj/
 ios/build/
 ios/DerivedData/
-*.xcworkspace/xcuserdata/
 xcuserdata/
-*.xcarchive
-*.ipa
-*.dSYM.zip
-
-# OS
+*.xcuserstate
 .DS_Store

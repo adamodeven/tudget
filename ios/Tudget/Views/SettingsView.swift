@@ -1,351 +1,406 @@
 import SwiftUI
 import SwiftData
+import UserNotifications
 
 struct SettingsView: View {
 
     @Environment(AppSettings.self) private var settings
     @Environment(\.modelContext) private var context
 
-    @Query private var transactions: [Transaction]
-    @Query(sort: [SortDescriptor(\BudgetCategory.sortOrder), SortDescriptor(\BudgetCategory.name)])
-    private var categories: [BudgetCategory]
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
 
-    @State private var isRecalculating = false
-    @State private var syncStatus: String?
-    @State private var isSyncing = false
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+    @State private var showingResetConfirmation = false
+    @State private var editingCategory: BudgetCategory?
+    @State private var showingNewCategory = false
 
     var body: some View {
         @Bindable var settings = settings
 
         NavigationStack {
-            Form {
-                Section {
-                    Picker("Home currency", selection: $settings.homeCurrency) {
-                        ForEach(Currency.pickerCodes(deviceCode: Currency.deviceCurrencyCode), id: \.self) {
-                            Text($0).tag($0)
-                        }
-                    }
-                    .onChange(of: settings.homeCurrency) { _, _ in
-                        Task { await recalculate() }
-                    }
-
-                    if isRecalculating {
-                        HStack {
-                            ProgressView()
-                            Text("Reconverting past purchases…")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Currency")
-                } footer: {
-                    Text("Budgets and totals use this currency. Changing it reconverts every past purchase at today's rate.")
+            ScrollView {
+                VStack(spacing: Theme.Metric.cardSpacing) {
+                    categoriesCard
+                    cycleCard
+                    alertsCard(settings: settings)
+                    aboutCard
+                    resetButton
                 }
-
-                Section("Budget") {
-                    NavigationLink {
-                        CategoriesView()
-                    } label: {
-                        LabeledContent("Categories", value: "\(categories.count)")
-                    }
-
-                    LabeledContent(
-                        "Monthly budget",
-                        value: Currency.formatCompact(
-                            categories.reduce(0) { $0 + $1.monthlyLimit },
-                            code: settings.homeCurrency
-                        )
-                    )
-                }
-
-                syncSection
-
-                Section("Data") {
-                    LabeledContent("Purchases logged", value: "\(transactions.count)")
-                    ShareLink(
-                        item: csvFile(),
-                        preview: SharePreview("Tudget export")
-                    ) {
-                        Label("Export CSV", systemImage: "square.and.arrow.up")
-                    }
-                }
-
-                Section {
-                    Button("Run setup again") {
-                        settings.hasCompletedSetup = false
-                    }
-                } footer: {
-                    Text("Tudget \(appVersion). Purchases are stored on this device; syncing is optional.")
-                }
+                .padding(.horizontal, Theme.Metric.gutter)
+                .padding(.bottom, 90)
             }
+            .background(AmbientBackground(tint: .blue))
+            .scrollEdgeEffectStyle(.soft, for: .top)
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $editingCategory) { CategoryEditor(category: $0) }
+            .sheet(isPresented: $showingNewCategory) { CategoryEditor(category: nil) }
+            .task { notificationStatus = await BudgetNotifier.shared.authorizationStatus() }
+            .confirmationDialog(
+                "Start over?",
+                isPresented: $showingResetConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete everything", role: .destructive) { reset() }
+            } message: {
+                Text("Deletes every purchase, category, and setting on this device.")
+            }
         }
     }
 
-    // MARK: - Sync
+    // MARK: - Categories
 
-    @ViewBuilder
-    private var syncSection: some View {
+    private var categoriesCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Categories").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    showingNewCategory = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.glass)
+            }
+
+            Text("Limits are per \(settings.periodLength.label.lowercased()) cycle, in \(settings.homeCurrencyCode).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(categories) { category in
+                Button {
+                    editingCategory = category
+                } label: {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(category.tint.color)
+                            .frame(width: 10, height: 10)
+                        Text(category.displayName)
+                            .font(.subheadline)
+                        Spacer()
+                        Text(Currency.formatCompact(category.periodLimit, code: settings.homeCurrencyCode))
+                            .font(.subheadline.weight(.medium))
+                            .monospacedDigit()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+
+                if category.id != categories.last?.id { Divider() }
+            }
+
+            Divider()
+            HStack {
+                Text("Total per cycle").font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(Currency.format(
+                    categories.reduce(0) { $0 + $1.periodLimit },
+                    code: settings.homeCurrencyCode
+                ))
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    // MARK: - Cycle
+
+    private var cycleCard: some View {
         @Bindable var settings = settings
 
-        Section {
-            Toggle("Sync to my server", isOn: $settings.syncEnabled)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Budget cycle").font(.subheadline.weight(.semibold))
 
-            if settings.syncEnabled {
-                TextField("https://your-server.ngrok-free.app", text: $settings.serverBaseURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-
-                SecureField("API token", text: $settings.serverToken)
-
-                Button {
-                    Task { await syncNow() }
-                } label: {
-                    HStack {
-                        Text("Sync now")
-                        Spacer()
-                        if isSyncing { ProgressView() }
-                    }
-                }
-                .disabled(!settings.isSyncConfigured || isSyncing)
-
-                if let syncStatus {
-                    Text(syncStatus)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            Picker("Length", selection: $settings.periodLength) {
+                ForEach(BudgetPeriodLength.allCases) { Text($0.label).tag($0) }
             }
-        } header: {
-            Text("Sync (optional)")
-        } footer: {
-            Text("Pushes purchases to the self-hosted Tudget server so the Notion dashboard, bank-email parsing, and Plaid reconciliation keep working. Leave off to use Tudget entirely on-device.")
-        }
-    }
+            .pickerStyle(.segmented)
 
-    private func syncNow() async {
-        isSyncing = true
-        defer { isSyncing = false }
-
-        let result = await SyncService.syncPending(in: context, settings: settings)
-        switch result {
-        case .success(let count):
-            syncStatus = count == 0
-                ? "Everything already synced."
-                : "Synced \(count) purchase\(count == 1 ? "" : "s")."
-        case .failure(let error):
-            syncStatus = "Sync failed: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func recalculate() async {
-        isRecalculating = true
-        await LedgerActions.recalculateHomeAmounts(in: context, settings: settings)
-        isRecalculating = false
-    }
-
-    private var appVersion: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(version) (\(build))"
-    }
-
-    /// Writes a CSV of every purchase to a temp file for ShareLink.
-    private func csvFile() -> URL {
-        let header = "Date,Merchant,Amount,Currency,Amount (\(settings.homeCurrency)),Category,Source,Note\n"
-        let rows = transactions
-            .sorted { $0.timestamp > $1.timestamp }
-            .map { transaction in
-                [
-                    ISO8601DateFormatter().string(from: transaction.timestamp),
-                    csvEscape(transaction.merchant),
-                    String(format: "%.2f", transaction.amount),
-                    transaction.currencyCode,
-                    String(format: "%.2f", transaction.amountInHomeCurrency),
-                    csvEscape(transaction.category?.name ?? ""),
-                    transaction.source.rawValue,
-                    csvEscape(transaction.note ?? ""),
-                ].joined(separator: ",")
-            }
-            .joined(separator: "\n")
-
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tudget-export.csv")
-        try? (header + rows).write(to: url, atomically: true, encoding: .utf8)
-        return url
-    }
-
-    private func csvEscape(_ value: String) -> String {
-        guard value.contains(",") || value.contains("\"") || value.contains("\n") else {
-            return value
-        }
-        return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
-    }
-}
-
-// MARK: - Categories
-
-struct CategoriesView: View {
-
-    @Environment(AppSettings.self) private var settings
-    @Environment(\.modelContext) private var context
-
-    @Query(sort: [SortDescriptor(\BudgetCategory.sortOrder), SortDescriptor(\BudgetCategory.name)])
-    private var categories: [BudgetCategory]
-
-    @State private var showingAdd = false
-
-    var body: some View {
-        List {
-            ForEach(categories) { category in
-                NavigationLink {
-                    CategoryEditor(category: category)
-                } label: {
-                    HStack {
-                        Text(category.displayName)
-                        Spacer()
-                        Text(Currency.formatCompact(category.monthlyLimit, code: settings.homeCurrency))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .onDelete { offsets in
-                for index in offsets {
-                    LedgerActions.deleteCategory(categories[index], in: context)
-                }
-            }
-            .onMove(perform: move)
-        }
-        .navigationTitle("Categories")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingAdd = true } label: {
-                    Label("Add category", systemImage: "plus")
-                }
-            }
-            ToolbarItem(placement: .topBarLeading) { EditButton() }
-        }
-        .sheet(isPresented: $showingAdd) {
-            CategoryEditor(category: nil)
-        }
-        .overlay {
-            if categories.isEmpty {
-                EmptyStateView(
-                    systemImage: "tray",
-                    title: "No categories",
-                    message: "Add a category to start budgeting by type of spend."
+            if settings.periodLength != .monthly {
+                DatePicker(
+                    "Starts",
+                    selection: $settings.periodAnchor,
+                    displayedComponents: .date
                 )
+                .font(.subheadline)
+                .onChange(of: settings.periodAnchor) { _, newValue in
+                    let snapped = BudgetPeriodCalculator.mondayOnOrBefore(newValue)
+                    if snapped != newValue { settings.periodAnchor = snapped }
+                }
+            }
+
+            Divider()
+
+            StatRow(label: "This cycle", value: settings.period().formattedRange())
+            StatRow(label: "Ends", value: settings.period().remainingDescription())
+
+            Divider()
+
+            Picker("Currency", selection: $settings.homeCurrencyCode) {
+                ForEach(Currency.pickerCodes(deviceCode: Currency.deviceCurrencyCode), id: \.self) {
+                    Text($0).tag($0)
+                }
+            }
+            .font(.subheadline)
+
+            Text("Changing this doesn't reconvert past purchases — each one keeps the rate it was logged at.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    // MARK: - Alerts
+
+    private func alertsCard(settings: AppSettings) -> some View {
+        @Bindable var settings = settings
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Toggle(isOn: $settings.alertsEnabled) {
+                Text("Budget alerts").font(.subheadline.weight(.semibold))
+            }
+
+            if settings.alertsEnabled {
+                if notificationStatus == .denied {
+                    Label(
+                        "Notifications are off for Tudget in iOS Settings.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                } else if notificationStatus == .notDetermined {
+                    Button("Allow notifications") {
+                        Task {
+                            await BudgetNotifier.shared.requestAuthorization()
+                            notificationStatus = await BudgetNotifier.shared.authorizationStatus()
+                        }
+                    }
+                    .buttonStyle(.glass)
+                    .font(.subheadline)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Warn me at").font(.subheadline)
+                        Spacer()
+                        Text("\(Int(settings.warnThreshold * 100))%")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    Slider(value: $settings.warnThreshold, in: 0.5...0.95, step: 0.05)
+                }
+
+                Text("One alert per category per cycle, plus one if your overall pace would run you out early.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    // MARK: - About
+
+    private var aboutCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Capture shortcuts").font(.subheadline.weight(.semibold))
+
+            aboutRow("square.and.arrow.up", "Share sheet",
+                     "Screenshot a bank alert → Share → Tudget.")
+            aboutRow("switch.2", "Control Centre",
+                     "Add the Tudget control to log a purchase from anywhere.")
+            aboutRow("rectangle.stack", "Widgets",
+                     "Home and Lock Screen widgets show what's left and open straight into entry.")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private func aboutRow(_ icon: String, _ title: String, _ body: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.footnote)
+                .foregroundStyle(.blue)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.subheadline.weight(.medium))
+                Text(body).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    private func move(from source: IndexSet, to destination: Int) {
-        var reordered = categories
-        reordered.move(fromOffsets: source, toOffset: destination)
-        for (index, category) in reordered.enumerated() {
-            category.sortOrder = index
+    private var resetButton: some View {
+        Button(role: .destructive) {
+            showingResetConfirmation = true
+        } label: {
+            Label("Start over", systemImage: "arrow.counterclockwise")
+                .frame(maxWidth: .infinity)
         }
-        try? context.save()
-        LedgerActions.publishCategorySnapshot(from: context)
+        .buttonStyle(.glass)
+        .tint(.red)
+    }
+
+    private func reset() {
+        for transaction in Ledger.allTransactions(in: context) {
+            context.delete(transaction)
+        }
+        for category in categories {
+            context.delete(category)
+        }
+        Ledger.save(context)
+        settings.reset()
     }
 }
 
-struct CategoryEditor: View {
+/// Add or edit one category.
+private struct CategoryEditor: View {
 
-    /// nil creates a new category; non-nil edits in place.
     let category: BudgetCategory?
 
     @Environment(AppSettings.self) private var settings
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
+
     @State private var name = ""
     @State private var emoji = ""
     @State private var limitText = ""
+    @State private var tint: CategoryTint = .blue
 
-    private var isNew: Bool { category == nil }
-    private var canSave: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty
-    }
+    private var limit: Double { CurrencyParser.parseNumber(limitText) ?? 0 }
 
     var body: some View {
-        Group {
-            if isNew {
-                NavigationStack { form.navigationTitle("New category") }
-            } else {
-                form.navigationTitle(name.isEmpty ? "Category" : name)
-            }
-        }
-    }
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: Theme.Metric.cardSpacing) {
+                    VStack(spacing: 10) {
+                        LabeledContent("Name") {
+                            TextField("Groceries", text: $name)
+                                .multilineTextAlignment(.trailing)
+                        }
+                        Divider()
+                        LabeledContent("Emoji") {
+                            TextField("🍔", text: $emoji)
+                                .multilineTextAlignment(.trailing)
+                                .onChange(of: emoji) { _, new in
+                                    // One glyph is all the tile has room for.
+                                    if new.count > 1 { emoji = String(new.suffix(1)) }
+                                }
+                        }
+                        Divider()
+                        LabeledContent("Limit per cycle") {
+                            TextField("0", text: $limitText)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .monospacedDigit()
+                        }
+                    }
+                    .font(.subheadline)
+                    .glassCard()
 
-    private var form: some View {
-        Form {
-            Section {
-                TextField("Name", text: $name)
-                TextField("Emoji", text: $emoji)
-                HStack {
-                    TextField("Monthly limit", text: $limitText)
-                        .keyboardType(.decimalPad)
-                    Text(settings.homeCurrency)
-                        .foregroundStyle(.secondary)
-                }
-            }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Colour").font(.subheadline.weight(.semibold))
+                        Text("Every colour here is checked for colourblind separation — the set is deliberately small.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
-            if isNew {
-                Section {
-                    Button("Add category", action: save)
-                        .disabled(!canSave)
+                        GlassEffectContainer(spacing: 8) {
+                            FlowLayout(spacing: 8) {
+                                ForEach(CategoryTint.allCases) { option in
+                                    Button {
+                                        tint = option
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(option.color)
+                                                .frame(width: 12, height: 12)
+                                            Text(option.label).font(.caption)
+                                        }
+                                        .glassChip(tint: option.color, selected: tint == option)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glassCard()
+
+                    if category != nil {
+                        Button(role: .destructive) {
+                            if let category { Ledger.delete(category, context: context) }
+                            dismiss()
+                        } label: {
+                            Label("Delete category", systemImage: "trash")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glass)
+                        .tint(.red)
+
+                        Text("Purchases in this category are kept — they just become uncategorized.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
+                .padding(Theme.Metric.gutter)
             }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if isNew {
+            .background(AmbientBackground(tint: tint.color))
+            .navigationTitle(category == nil ? "New category" : "Edit category")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .buttonStyle(.glassProminent)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
         }
+        .presentationDetents([.large])
+        .presentationBackground(.regularMaterial)
         .onAppear(perform: load)
-        .onDisappear {
-            // Edits to an existing category commit on the way out; a brand-new
-            // one is only created by the explicit button.
-            if !isNew { save() }
-        }
     }
 
     private func load() {
         guard let category else { return }
         name = category.name
         emoji = category.emoji
-        limitText = String(format: "%.0f", category.monthlyLimit)
+        limitText = String(format: "%.0f", category.periodLimit)
+        tint = category.tint
     }
 
     private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty else { return }
-        let limit = CurrencyParser.parseNumber(limitText) ?? 0
-
         if let category {
-            category.name = trimmedName
+            category.name = name
             category.emoji = emoji
-            category.monthlyLimit = limit
+            category.periodLimit = limit
+            category.tint = tint
         } else {
-            context.insert(
-                BudgetCategory(
-                    name: trimmedName,
-                    monthlyLimit: limit,
-                    emoji: emoji,
-                    sortOrder: Int(Date().timeIntervalSince1970)
-                )
+            let new = BudgetCategory(
+                name: name,
+                periodLimit: limit,
+                emoji: emoji,
+                tint: tint,
+                sortOrder: (categories.map(\.sortOrder).max() ?? 0) + 1
             )
+            context.insert(new)
         }
-
-        try? context.save()
-        LedgerActions.publishCategorySnapshot(from: context)
-        if isNew { dismiss() }
+        Ledger.save(context)
+        dismiss()
     }
+}
+
+extension BudgetCategory: Identifiable {
+    var id: UUID { uuid }
 }

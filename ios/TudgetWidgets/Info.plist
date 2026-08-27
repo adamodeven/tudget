@@ -23,19 +23,7 @@
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.share-services</string>
-		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
-		<key>NSExtensionAttributes</key>
-		<dict>
-			<!-- Screenshots are the whole point, so the extension offers
-			     itself for a single image and nothing else. -->
-			<key>NSExtensionActivationRule</key>
-			<dict>
-				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
-				<integer>1</integer>
-			</dict>
-		</dict>
+		<string>com.apple.widgetkit-extension</string>
 	</dict>
 </dict>
 </plist>

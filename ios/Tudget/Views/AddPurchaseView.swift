@@ -1,317 +1,332 @@
 import SwiftUI
 import SwiftData
-import PhotosUI
 
-/// Logging a purchase by hand.
+/// Log a purchase from one line of text.
 ///
-/// Two modes, because both are genuinely faster in different moments: "Quick"
-/// is the one-line phrase the Python version took over SMS ("Trader Joe's $34
-/// groceries"), parsed live; "Details" is the structured form for when you
-/// want to attach a receipt or backdate something.
+/// The whole screen is built around the assumption that you're standing at a
+/// counter: the field is focused before the sheet finishes animating in, the
+/// parse updates as you type so you can see it understood you, and Return
+/// saves. Everything else -- date, note, receipt -- is behind a disclosure and
+/// out of the way.
 struct AddPurchaseView: View {
 
     @Environment(AppSettings.self) private var settings
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
-    @Query(sort: [SortDescriptor(\BudgetCategory.sortOrder), SortDescriptor(\BudgetCategory.name)])
-    private var categories: [BudgetCategory]
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
+    @Query(sort: \Transaction.timestamp, order: .reverse) private var transactions: [Transaction]
 
-    enum Mode: String, CaseIterable {
-        case quick = "Quick"
-        case details = "Details"
-    }
+    /// Pre-filled when arriving from a screenshot rather than the keyboard.
+    var prefill: PurchaseDraft?
 
-    @State private var mode: Mode = .quick
-    @State private var quickText = ""
-
-    @State private var merchant = ""
-    @State private var amountText = ""
-    @State private var currencyCode = ""
-    @State private var selectedCategory: BudgetCategory?
-    @State private var timestamp = Date()
+    @State private var text = ""
+    @State private var pickedCategory: BudgetCategory?
+    @State private var showingDetails = false
+    @State private var date = Date()
     @State private var note = ""
-
-    @State private var photoItem: PhotosPickerItem?
-    @State private var receiptData: Data?
     @State private var isSaving = false
+    /// Set once saved: the "what's left" line, shown briefly before dismissing.
+    @State private var confirmation: String?
 
-    /// What the quick-entry line currently parses to, recomputed as you type.
-    private var quickParse: PurchaseTextParser.QuickEntry {
+    @FocusState private var fieldFocused: Bool
+
+    private var parsed: PurchaseTextParser.QuickEntry {
         PurchaseTextParser.parseQuickEntry(
-            quickText,
+            text,
             categoryNames: categories.map(\.name),
-            defaultCurrency: settings.homeCurrency
+            defaultCurrency: settings.homeCurrencyCode
         )
     }
 
-    private var effectiveAmount: Double? {
-        switch mode {
-        case .quick: return quickParse.amount
-        case .details: return CurrencyParser.parseNumber(amountText)
-        }
-    }
-
-    private var effectiveMerchant: String {
-        switch mode {
-        case .quick: return quickParse.merchant ?? ""
-        case .details: return merchant.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
-    private var effectiveCurrency: String {
-        switch mode {
-        case .quick: return quickParse.currencyCode
-        case .details: return currencyCode.isEmpty ? settings.homeCurrency : currencyCode
-        }
-    }
-
+    /// The category actually used: an explicit tap always beats the parse.
     private var effectiveCategory: BudgetCategory? {
-        switch mode {
-        case .quick:
-            guard let name = quickParse.category else { return nil }
-            return categories.first { $0.name == name }
-        case .details:
-            return selectedCategory
-        }
+        if let pickedCategory { return pickedCategory }
+        guard let name = parsed.category else { return nil }
+        return categories.first { $0.name == name }
     }
 
     private var canSave: Bool {
-        guard let amount = effectiveAmount, amount > 0 else { return false }
-        return !effectiveMerchant.isEmpty
+        (parsed.amount ?? 0) > 0 && !isSaving
     }
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Picker("Mode", selection: $mode) {
-                        ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                .listRowBackground(Color.clear)
-
-                if mode == .quick {
-                    quickSection
+            Group {
+                if let confirmation {
+                    confirmationView(confirmation)
                 } else {
-                    detailsSection
-                }
-
-                Section {
-                    Button {
-                        Task { await save() }
-                    } label: {
-                        HStack {
-                            Spacer()
-                            if isSaving {
-                                ProgressView()
-                            } else {
-                                Text("Log purchase").fontWeight(.semibold)
-                            }
-                            Spacer()
-                        }
-                    }
-                    .disabled(!canSave || isSaving)
+                    form
                 }
             }
-            .navigationTitle("Add purchase")
+            .background(AmbientBackground(tint: effectiveCategory?.tint.color ?? .blue))
+            .navigationTitle("Add a purchase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .disabled(!canSave)
+                        .buttonStyle(.glassProminent)
+                }
             }
-            .onAppear {
-                if currencyCode.isEmpty { currencyCode = settings.homeCurrency }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(.regularMaterial)
+        .onAppear(perform: applyPrefill)
+    }
+
+    // MARK: - Form
+
+    private var form: some View {
+        ScrollView {
+            VStack(spacing: Theme.Metric.cardSpacing) {
+                entryField
+                if (parsed.amount ?? 0) > 0 { parseSummary }
+                categoryPicker
+                detailsDisclosure
             }
+            .padding(Theme.Metric.gutter)
         }
     }
 
-    // MARK: - Quick mode
-
-    private var quickSection: some View {
-        Section {
-            TextField("Trader Joe's $34 groceries", text: $quickText, axis: .vertical)
+    private var entryField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Trader Joe's $34 groceries", text: $text, axis: .vertical)
                 .font(.title3)
                 .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .focused($fieldFocused)
+                .submitLabel(.done)
+                .onSubmit { if canSave { Task { await save() } } }
 
-            if !quickText.isEmpty {
-                QuickParsePreview(
-                    parse: quickParse,
-                    matchedCategory: effectiveCategory,
-                    homeCurrency: settings.homeCurrency
-                )
-            }
-        } footer: {
-            Text("Type a merchant, an amount, and optionally a category. Any currency works — \"€12,47 lunch\", \"1200 JPY ramen\".")
+            Text("Merchant, amount, and a category — in any order.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+        .task {
+            // A beat, so focus lands after the sheet's presentation animation
+            // rather than fighting it.
+            try? await Task.sleep(for: .milliseconds(350))
+            fieldFocused = true
         }
     }
 
-    // MARK: - Details mode
+    /// Shows what was understood, so a misparse is visible before you save
+    /// rather than discovered in the ledger a week later.
+    private var parseSummary: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Merchant").font(.caption2).foregroundStyle(.secondary)
+                Text(parsed.merchant ?? "—")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("Amount").font(.caption2).foregroundStyle(.secondary)
+                Text(Currency.format(parsed.amount ?? 0, code: parsed.currencyCode))
+                    .font(Theme.figure)
+                    .contentTransition(.numericText())
+            }
+        }
+        .animation(.smooth, value: parsed)
+        .glassCard(radius: Theme.Metric.tightRadius)
+    }
 
-    private var detailsSection: some View {
-        Group {
-            Section("Purchase") {
-                TextField("Merchant", text: $merchant)
-                    .textInputAutocapitalization(.words)
-
-                HStack {
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                    Divider()
-                    CurrencyPicker(selection: $currencyCode)
-                        .labelsHidden()
+    private var categoryPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Category").font(.subheadline.weight(.semibold))
+                Spacer()
+                if effectiveCategory == nil {
+                    Text("Optional — you can set it later")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-
-                DatePicker("When", selection: $timestamp, in: ...Date())
             }
 
-            Section("Category") {
-                CategoryPicker(categories: categories, selection: $selectedCategory)
-            }
-
-            Section("Optional") {
-                TextField("Note", text: $note, axis: .vertical)
-
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Label(
-                        receiptData == nil ? "Attach receipt" : "Receipt attached",
-                        systemImage: receiptData == nil ? "paperclip" : "checkmark.circle.fill"
-                    )
-                }
-                .onChange(of: photoItem) { _, item in
-                    Task { receiptData = try? await item?.loadTransferable(type: Data.self) }
-                }
-
-                if receiptData != nil {
-                    Button("Remove receipt", role: .destructive) {
-                        receiptData = nil
-                        photoItem = nil
+            GlassEffectContainer(spacing: 8) {
+                FlowLayout(spacing: 8) {
+                    ForEach(categories) { category in
+                        let isSelected = effectiveCategory?.uuid == category.uuid
+                        Button {
+                            withAnimation(.smooth) {
+                                pickedCategory = isSelected ? nil : category
+                            }
+                        } label: {
+                            Text(category.displayName)
+                                .font(.subheadline)
+                                .fontWeight(isSelected ? .semibold : .regular)
+                                .glassChip(tint: category.tint.color, selected: isSelected)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Save
+    private var detailsDisclosure: some View {
+        DisclosureGroup(isExpanded: $showingDetails) {
+            VStack(spacing: 12) {
+                DatePicker("When", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                TextField("Note", text: $note)
+            }
+            .padding(.top, 8)
+        } label: {
+            Label("Details", systemImage: "slider.horizontal.3")
+                .font(.subheadline.weight(.medium))
+        }
+        .glassCard(radius: Theme.Metric.tightRadius)
+    }
+
+    // MARK: - Confirmation
+
+    /// The same sentence the server used to text back after categorizing.
+    private func confirmationView(_ line: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(.green)
+                .symbolEffect(.bounce, value: line)
+
+            Text(line)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+
+    // MARK: - Actions
+
+    private func applyPrefill() {
+        guard let prefill, text.isEmpty else { return }
+        text = prefill.asQuickEntryText
+        date = prefill.timestamp
+        if let name = prefill.categoryName {
+            pickedCategory = categories.first { $0.name == name }
+        }
+    }
 
     private func save() async {
-        guard let amount = effectiveAmount, !effectiveMerchant.isEmpty else { return }
+        guard let amount = parsed.amount, amount > 0 else { return }
         isSaving = true
 
-        await LedgerActions.addTransaction(
-            in: context,
-            merchant: effectiveMerchant,
+        let category = effectiveCategory
+
+        await Ledger.record(
+            merchant: parsed.merchant ?? "Unknown",
             amount: amount,
-            currencyCode: effectiveCurrency,
-            category: effectiveCategory,
-            receiptData: mode == .details ? receiptData : nil,
-            note: mode == .details && !note.isEmpty ? note : nil,
-            source: .manual,
-            timestamp: mode == .details ? timestamp : Date(),
+            currencyCode: parsed.currencyCode,
+            category: category,
+            note: note.isEmpty ? nil : note,
+            timestamp: showingDetails ? date : Date(),
+            source: prefill == nil ? .quickEntry : .screenshot,
+            context: context,
             settings: settings
         )
 
-        isSaving = false
+        await BudgetNotifier.shared.refreshAlerts(context: context, settings: settings)
+
+        confirmation = confirmationLine(for: category)
+
+        try? await Task.sleep(for: .milliseconds(1600))
         dismiss()
     }
-}
 
-// MARK: - Supporting views
+    private func confirmationLine(for category: BudgetCategory?) -> String {
+        let period = settings.period()
+        let summary = BudgetCalculator.summary(
+            categories: Ledger.limits(from: categories),
+            records: Ledger.spendRecords(from: Ledger.transactions(in: period, context: context)),
+            period: period,
+            homeCurrency: settings.homeCurrencyCode
+        )
 
-private struct QuickParsePreview: View {
-
-    let parse: PurchaseTextParser.QuickEntry
-    let matchedCategory: BudgetCategory?
-    let homeCurrency: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            row("Merchant", parse.merchant ?? "—")
-            row(
-                "Amount",
-                parse.amount.map { Currency.format($0, code: parse.currencyCode) } ?? "—"
-            )
-            row("Category", matchedCategory?.displayName ?? "Ask me later")
+        guard let category else {
+            return "Logged. Tell me what it was when you get a moment."
         }
-        .font(.footnote)
-        .padding(.vertical, 4)
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).fontWeight(.medium)
-        }
+        return BudgetCalculator.confirmationLine(for: category.uuid, summary: summary)
     }
 }
 
-struct CurrencyPicker: View {
+/// What a screenshot (or any non-keyboard source) hands to the entry screen.
+struct PurchaseDraft: Equatable {
+    var merchant: String?
+    var amount: Double?
+    var currencyCode: String
+    var categoryName: String?
+    var timestamp: Date = Date()
+    var receiptFilename: String?
 
-    @Binding var selection: String
-
-    private var codes: [String] {
-        Currency.pickerCodes(deviceCode: Currency.deviceCurrencyCode)
+    /// Rendered back into the one-line grammar, so the screenshot path and the
+    /// typed path converge on the same editable text.
+    var asQuickEntryText: String {
+        var parts: [String] = []
+        if let merchant { parts.append(merchant) }
+        if let amount { parts.append(Currency.format(amount, code: currencyCode)) }
+        return parts.joined(separator: " ")
     }
+}
 
-    var body: some View {
-        Picker("Currency", selection: $selection) {
-            ForEach(codes, id: \.self) { code in
-                Text(code).tag(code)
+/// Wraps chips onto as many lines as they need.
+///
+/// `LazyVGrid` can't do this -- category names vary in width and a fixed
+/// column count leaves ragged gaps.
+struct FlowLayout: Layout {
+
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [CGFloat] = [0]
+        var rowHeights: [CGFloat] = [0]
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let current = rows[rows.count - 1]
+            let needed = current == 0 ? size.width : current + spacing + size.width
+
+            if needed > maxWidth, current > 0 {
+                rows.append(size.width)
+                rowHeights.append(size.height)
+            } else {
+                rows[rows.count - 1] = needed
+                rowHeights[rowHeights.count - 1] = max(rowHeights[rowHeights.count - 1], size.height)
             }
         }
-        .pickerStyle(.menu)
+
+        let height = rowHeights.reduce(0, +) + spacing * CGFloat(max(0, rowHeights.count - 1))
+        return CGSize(width: proposal.width ?? rows.max() ?? 0, height: height)
     }
-}
 
-struct CategoryPicker: View {
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
 
-    let categories: [BudgetCategory]
-    @Binding var selection: BudgetCategory?
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
 
-    var body: some View {
-        if categories.isEmpty {
-            Text("No categories yet — add some in Settings.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(categories) { category in
-                        CategoryChip(
-                            title: category.displayName,
-                            isSelected: selection?.uuid == category.uuid
-                        ) {
-                            selection = selection?.uuid == category.uuid ? nil : category
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
             }
+
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
         }
-    }
-}
-
-struct CategoryChip: View {
-
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(
-                    isSelected ? Color.tudgetAccent : Color.secondary.opacity(0.15),
-                    in: Capsule()
-                )
-                .foregroundStyle(isSelected ? .white : .primary)
-        }
-        .buttonStyle(.plain)
     }
 }

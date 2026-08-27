@@ -4,108 +4,167 @@ import SwiftData
 struct HistoryView: View {
 
     @Environment(AppSettings.self) private var settings
+    @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var context
 
-    @Query(sort: \Transaction.timestamp, order: .reverse)
-    private var transactions: [Transaction]
+    @Query(sort: \Transaction.timestamp, order: .reverse) private var transactions: [Transaction]
 
-    @State private var searchText = ""
-    @State private var showingUncategorizedOnly = false
+    @State private var search = ""
+    @State private var showOnlyUncategorized = false
 
     private var filtered: [Transaction] {
-        var result = transactions
-
-        if showingUncategorizedOnly {
-            result = result.filter { !$0.isCategorized }
+        transactions.filter { transaction in
+            if showOnlyUncategorized, transaction.category != nil { return false }
+            guard !search.isEmpty else { return true }
+            let needle = search.lowercased()
+            return transaction.merchant.lowercased().contains(needle)
+                || (transaction.category?.name.lowercased().contains(needle) ?? false)
+                || (transaction.note?.lowercased().contains(needle) ?? false)
         }
-
-        let needle = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        if !needle.isEmpty {
-            result = result.filter {
-                $0.merchant.lowercased().contains(needle)
-                    || ($0.category?.name.lowercased().contains(needle) ?? false)
-                    || ($0.note?.lowercased().contains(needle) ?? false)
-            }
-        }
-
-        return result
     }
 
-    /// Grouped by month so scrolling back through history stays legible.
-    private var sections: [(month: Date, transactions: [Transaction])] {
-        let grouped = Dictionary(grouping: filtered) { transaction in
-            BudgetCalculator.monthBounds(containing: transaction.timestamp).start
+    /// Grouped by day, newest first -- a flat list of 200 purchases is hard to
+    /// scan, and "what did I spend on Tuesday" is the usual question.
+    private var grouped: [(day: Date, items: [Transaction])] {
+        let calendar = Calendar.current
+        let buckets = Dictionary(grouping: filtered) {
+            calendar.startOfDay(for: $0.timestamp)
         }
-        return grouped
-            .map { (month: $0.key, transactions: $0.value) }
-            .sorted { $0.month > $1.month }
+        return buckets
+            .map { (day: $0.key, items: $0.value.sorted { $0.timestamp > $1.timestamp }) }
+            .sorted { $0.day > $1.day }
     }
 
     var body: some View {
         NavigationStack {
             Group {
                 if filtered.isEmpty {
-                    EmptyStateView(
-                        systemImage: transactions.isEmpty ? "list.bullet" : "magnifyingglass",
-                        title: transactions.isEmpty ? "No purchases yet" : "Nothing matches",
+                    EmptyHint(
+                        systemImage: "tray",
+                        title: transactions.isEmpty ? "Nothing logged yet" : "No matches",
                         message: transactions.isEmpty
-                            ? "Log your first purchase from the Budget tab."
-                            : "Try a different search or clear the filter."
+                            ? "Purchases you add will show up here."
+                            : "Try a different search."
                     )
+                    .padding()
                 } else {
-                    List {
-                        ForEach(sections, id: \.month) { section in
-                            Section {
-                                ForEach(section.transactions) { transaction in
-                                    NavigationLink {
-                                        TransactionDetailView(transaction: transaction)
-                                    } label: {
-                                        TransactionRow(transaction: transaction)
-                                    }
-                                    .listRowInsets(EdgeInsets())
+                    list
+                }
+            }
+            .background(AmbientBackground(tint: .blue))
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .navigationTitle("History")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $search, prompt: "Merchant, category, or note")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        withAnimation(.smooth) { showOnlyUncategorized.toggle() }
+                    } label: {
+                        Image(systemName: showOnlyUncategorized
+                              ? "line.3.horizontal.decrease.circle.fill"
+                              : "line.3.horizontal.decrease.circle")
+                    }
+                    .accessibilityLabel("Show only uncategorized")
+                }
+            }
+        }
+    }
+
+    private var list: some View {
+        ScrollView {
+            LazyVStack(spacing: Theme.Metric.cardSpacing, pinnedViews: [.sectionHeaders]) {
+                ForEach(grouped, id: \.day) { group in
+                    Section {
+                        VStack(spacing: 0) {
+                            ForEach(group.items) { transaction in
+                                NavigationLink {
+                                    TransactionDetailView(transaction: transaction)
+                                } label: {
+                                    TransactionRow(transaction: transaction)
                                 }
-                                .onDelete { offsets in
-                                    delete(offsets, in: section.transactions)
-                                }
-                            } header: {
-                                HStack {
-                                    Text(section.month.formatted(.dateTime.month(.wide).year()))
-                                    Spacer()
-                                    Text(monthTotal(section.transactions))
+                                .buttonStyle(.plain)
+
+                                if transaction.id != group.items.last?.id {
+                                    Divider().padding(.leading, 44)
                                 }
                             }
                         }
-                    }
-                    .listStyle(.insetGrouped)
-                }
-            }
-            .navigationTitle("History")
-            .searchable(text: $searchText, prompt: "Search merchant or category")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingUncategorizedOnly.toggle()
-                    } label: {
-                        Label(
-                            "Uncategorized only",
-                            systemImage: showingUncategorizedOnly
-                                ? "line.3.horizontal.decrease.circle.fill"
-                                : "line.3.horizontal.decrease.circle"
-                        )
+                        .glassCard(radius: Theme.Metric.tightRadius)
+                    } header: {
+                        HStack {
+                            Text(group.day, format: .dateTime.weekday(.wide).month().day())
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(dayTotal(group.items))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
                     }
                 }
             }
+            .padding(.horizontal, Theme.Metric.gutter)
+            .padding(.bottom, 90)
         }
     }
 
-    private func monthTotal(_ transactions: [Transaction]) -> String {
-        let total = transactions.reduce(0) { $0 + $1.amountInHomeCurrency }
-        return Currency.formatCompact(total, code: settings.homeCurrency)
+    private func dayTotal(_ items: [Transaction]) -> String {
+        let total = items.reduce(0) { $0 + $1.amountInHomeCurrency }
+        return Currency.formatCompact(total, code: settings.homeCurrencyCode)
     }
+}
 
-    private func delete(_ offsets: IndexSet, in transactions: [Transaction]) {
-        for index in offsets {
-            LedgerActions.delete(transactions[index], in: context)
+struct TransactionRow: View {
+
+    let transaction: Transaction
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill((transaction.category?.tint.color ?? Color.secondary).opacity(0.22))
+                Text(transaction.category?.emoji.isEmpty == false
+                     ? transaction.category!.emoji
+                     : "•")
+                    .font(.system(size: 15))
+            }
+            .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(transaction.displayMerchant)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+
+                HStack(spacing: 5) {
+                    // Category identity is name + emoji, never colour alone.
+                    Text(transaction.category?.name ?? "Uncategorized")
+                        .foregroundStyle(transaction.category == nil ? .orange : .secondary)
+                    Image(systemName: transaction.source.systemImage)
+                        .foregroundStyle(.tertiary)
+                    Text(transaction.timestamp, format: .dateTime.hour().minute())
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.caption)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(transaction.formattedAmount)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                if let home = transaction.formattedHomeAmount {
+                    Text(home)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
+        .padding(.vertical, 9)
+        .contentShape(.rect)
     }
 }

@@ -2,11 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Shared with the share extension: the category snapshot the extension
-	     reads, and the inbox of captured purchases the app drains. -->
+	<!-- Shared container: the app, the share extension, and the widgets all
+	     read and write the same SwiftData store through this group. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.$(APP_BUNDLE_ID)</string>
 	</array>
+
+	<!-- iCloud sync is switched on in a second pass, once the app is
+	     installed and signing is known good. The data model is already
+	     CloudKit-compatible, so turning it on is these three keys plus the
+	     `cloudKitDatabase` line in TudgetApp.swift.
+
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.$(APP_BUNDLE_ID)</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>aps-environment</key>
+	<string>development</string>
+	-->
 </dict>
 </plist>

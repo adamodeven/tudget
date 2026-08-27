@@ -1,0 +1,10 @@
+# Tudget ingest server config.
+#
+# Copy to config.yaml and set a token. config.yaml is gitignored.
+#
+# Generate a token with:
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+token: "paste-a-generated-token-here"
+host: "0.0.0.0"
+port: 8000

@@ -1,70 +1,114 @@
 import Foundation
 import Observation
 
-/// User preferences, stored in the App Group's defaults so the share extension
-/// reads the same home currency the app is using.
+/// User settings, stored in the shared App Group so the widgets and the share
+/// extension see exactly what the app sees.
+///
+/// `@Observable` so SwiftUI re-renders on change, but every property reads and
+/// writes straight through to `UserDefaults` rather than caching -- an
+/// extension and the app can be alive at the same time, and a cached copy in
+/// either one would go stale.
 @Observable
 final class AppSettings {
 
     static let shared = AppSettings()
 
-    private enum Key {
-        static let homeCurrency = "tudget.homeCurrency"
-        static let hasCompletedSetup = "tudget.hasCompletedSetup"
-        static let syncEnabled = "tudget.syncEnabled"
-        static let serverBaseURL = "tudget.serverBaseURL"
-        static let serverToken = "tudget.serverToken"
-    }
-
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
-        self.homeCurrency = defaults.string(forKey: Key.homeCurrency)
-            ?? Currency.deviceCurrencyCode
-            ?? "USD"
-        self.hasCompletedSetup = defaults.bool(forKey: Key.hasCompletedSetup)
-        self.syncEnabled = defaults.bool(forKey: Key.syncEnabled)
-        self.serverBaseURL = defaults.string(forKey: Key.serverBaseURL) ?? ""
-        self.serverToken = defaults.string(forKey: Key.serverToken) ?? ""
     }
 
-    /// The currency every budget limit and total is expressed in.
-    var homeCurrency: String {
-        didSet { defaults.set(homeCurrency, forKey: Key.homeCurrency) }
+    private enum Key {
+        static let homeCurrency = "tudget.homeCurrency"
+        static let periodLength = "tudget.periodLength"
+        static let periodAnchor = "tudget.periodAnchor"
+        static let takeHomePerPeriod = "tudget.takeHomePerPeriod"
+        static let hasCompletedSetup = "tudget.hasCompletedSetup"
+        static let alertsEnabled = "tudget.alertsEnabled"
+        static let warnThreshold = "tudget.warnThreshold"
+    }
+
+    // MARK: - Currency
+
+    /// The currency budgets are tracked in. Defaults to the device's, falling
+    /// back to USD.
+    var homeCurrencyCode: String {
+        get { defaults.string(forKey: Key.homeCurrency) ?? Currency.deviceCurrencyCode ?? "USD" }
+        set { defaults.set(newValue, forKey: Key.homeCurrency) }
+    }
+
+    // MARK: - Budget period
+
+    var periodLength: BudgetPeriodLength {
+        get {
+            guard let raw = defaults.string(forKey: Key.periodLength),
+                  let value = BudgetPeriodLength(rawValue: raw) else { return .biweekly }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.periodLength) }
+    }
+
+    /// The day a cycle starts from. Defaults to the most recent Monday, and
+    /// every fortnight tiles forward and back from there.
+    var periodAnchor: Date {
+        get {
+            let stored = defaults.double(forKey: Key.periodAnchor)
+            guard stored > 0 else { return BudgetPeriodCalculator.mondayOnOrBefore(Date()) }
+            return Date(timeIntervalSince1970: stored)
+        }
+        set { defaults.set(newValue.timeIntervalSince1970, forKey: Key.periodAnchor) }
+    }
+
+    /// Take-home pay for one budget period, used to suggest limits in setup.
+    var takeHomePerPeriod: Double {
+        get { defaults.double(forKey: Key.takeHomePerPeriod) }
+        set { defaults.set(newValue, forKey: Key.takeHomePerPeriod) }
     }
 
     var hasCompletedSetup: Bool {
-        didSet { defaults.set(hasCompletedSetup, forKey: Key.hasCompletedSetup) }
+        get { defaults.bool(forKey: Key.hasCompletedSetup) }
+        set { defaults.set(newValue, forKey: Key.hasCompletedSetup) }
     }
 
-    /// Optional: push transactions to the self-hosted Tudget server, which
-    /// keeps the Notion dashboard, Gmail alert parsing, and Plaid
-    /// reconciliation working alongside the app.
-    var syncEnabled: Bool {
-        didSet { defaults.set(syncEnabled, forKey: Key.syncEnabled) }
+    // MARK: - Alerts
+
+    var alertsEnabled: Bool {
+        get { defaults.object(forKey: Key.alertsEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.alertsEnabled) }
     }
 
-    var serverBaseURL: String {
-        didSet { defaults.set(serverBaseURL, forKey: Key.serverBaseURL) }
+    /// Fraction of a category's limit at which it's worth saying something.
+    var warnThreshold: Double {
+        get {
+            let stored = defaults.double(forKey: Key.warnThreshold)
+            return stored > 0 ? stored : 0.8
+        }
+        set { defaults.set(newValue, forKey: Key.warnThreshold) }
     }
 
-    var serverToken: String {
-        didSet { defaults.set(serverToken, forKey: Key.serverToken) }
+    // MARK: - Derived
+
+    /// The period containing `date`, per the current settings.
+    func period(containing date: Date = Date()) -> BudgetPeriod {
+        BudgetPeriodCalculator.period(
+            containing: date, anchor: periodAnchor, length: periodLength
+        )
     }
 
-    /// Sync is only attempted when it's switched on and actually configured.
-    var isSyncConfigured: Bool {
-        syncEnabled
-            && URL(string: serverBaseURL)?.scheme != nil
-            && !serverToken.isEmpty
+    func period(offsetBy offset: Int, from date: Date = Date()) -> BudgetPeriod {
+        BudgetPeriodCalculator.adjacent(
+            to: period(containing: date),
+            offset: offset,
+            anchor: periodAnchor,
+            length: periodLength
+        )
     }
 
-    /// Read-only accessor for the share extension, which shouldn't be mutating
-    /// preferences.
-    static var homeCurrencyForExtension: String {
-        AppGroup.defaults.string(forKey: Key.homeCurrency)
-            ?? Currency.deviceCurrencyCode
-            ?? "USD"
+    /// Resets everything -- used by "Start over" in Settings.
+    func reset() {
+        [Key.homeCurrency, Key.periodLength, Key.periodAnchor, Key.takeHomePerPeriod,
+         Key.hasCompletedSetup, Key.alertsEnabled, Key.warnThreshold]
+            .forEach(defaults.removeObject(forKey:))
     }
 }

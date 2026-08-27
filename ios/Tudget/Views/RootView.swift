@@ -4,82 +4,103 @@ import SwiftData
 struct RootView: View {
 
     @Environment(AppSettings.self) private var settings
-    @Environment(\.modelContext) private var context
+    @Environment(AppRouter.self) private var router
     @Environment(\.scenePhase) private var scenePhase
 
-    @Query private var categories: [BudgetCategory]
-
-    @State private var showingAddPurchase = false
-    @State private var ingestedBanner: String?
-
     var body: some View {
-        TabView {
-            DashboardView(showingAddPurchase: $showingAddPurchase)
-                .tabItem { Label("Budget", systemImage: "chart.pie.fill") }
+        @Bindable var settings = settings
 
-            HistoryView()
-                .tabItem { Label("History", systemImage: "list.bullet") }
-
-            SettingsView()
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
-        }
-        .sheet(isPresented: $showingAddPurchase) {
-            AddPurchaseView()
-        }
-        .fullScreenCover(isPresented: Binding(
-            get: { !settings.hasCompletedSetup },
-            set: { if !$0 { settings.hasCompletedSetup = true } }
-        )) {
-            BudgetSetupView()
-        }
-        .overlay(alignment: .top) {
-            if let ingestedBanner {
-                IngestBanner(message: ingestedBanner)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+        Group {
+            if settings.hasCompletedSetup {
+                tabs
+            } else {
+                BudgetSetupView()
             }
         }
-        .task {
-            // Publish on launch so a fresh install's share extension has a
-            // category list before the app is ever foregrounded again.
-            LedgerActions.publishCategorySnapshot(from: context)
-            await ingestPending()
+        .onChange(of: scenePhase) { _, phase in
+            // Control Center and the widgets leave a note rather than
+            // presenting anything themselves; this is where it's picked up.
+            if phase == .active { router.consumePendingAction() }
         }
-        .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
-            Task { await ingestPending() }
-        }
-        .onChange(of: categories.map(\.uuid)) { _, _ in
-            LedgerActions.publishCategorySnapshot(from: context)
+        .onOpenURL { url in
+            if let action = QuickAction(url: url) { router.handle(action) }
         }
     }
 
-    /// Pulls in anything the share extension captured while the app was
-    /// backgrounded, and says so briefly rather than silently changing totals.
-    private func ingestPending() async {
-        let count = await LedgerActions.ingestPendingPurchases(
-            in: context, settings: settings
-        )
-        guard count > 0 else { return }
+    private var tabs: some View {
+        @Bindable var router = router
 
-        let noun = count == 1 ? "purchase" : "purchases"
-        withAnimation { ingestedBanner = "Added \(count) shared \(noun)" }
-
-        try? await Task.sleep(for: .seconds(2.5))
-        withAnimation { ingestedBanner = nil }
+        return TabView(selection: $router.tab) {
+            Tab("Budget", systemImage: "chart.pie.fill", value: AppRouter.Tab.budget) {
+                DashboardView()
+            }
+            Tab("Pace", systemImage: "chart.xyaxis.line", value: AppRouter.Tab.pace) {
+                PaceView()
+            }
+            Tab("History", systemImage: "list.bullet", value: AppRouter.Tab.history) {
+                HistoryView()
+            }
+            Tab("Settings", systemImage: "gearshape", value: AppRouter.Tab.settings) {
+                SettingsView()
+            }
+        }
+        // The single most important affordance in the app: a capture bar that
+        // never scrolls away, on every tab, one tap from a logged purchase.
+        .tabViewBottomAccessory {
+            QuickAddAccessory()
+        }
+        .tabBarMinimizeBehavior(.onScrollDown)
+        .sheet(isPresented: $router.showingQuickAdd) {
+            AddPurchaseView()
+        }
+        .sheet(isPresented: $router.showingScreenshotImport) {
+            ScreenshotImportView()
+        }
+        .sheet(item: $router.categorizing) { transaction in
+            CategorizeSheet(transaction: transaction)
+        }
     }
 }
 
-private struct IngestBanner: View {
-    let message: String
+/// The persistent capture bar docked above the tab bar.
+///
+/// It sits in the tab bar's own glass, so it costs no screen real estate and
+/// is always within thumb reach -- the whole point being that logging a
+/// purchase never requires navigating anywhere first.
+private struct QuickAddAccessory: View {
+
+    @Environment(AppRouter.self) private var router
 
     var body: some View {
-        Label(message, systemImage: "checkmark.circle.fill")
-            .font(.subheadline.weight(.medium))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().stroke(Color.tudgetAccent.opacity(0.4)))
-            .padding(.top, 8)
-            .shadow(radius: 8, y: 4)
+        HStack(spacing: 10) {
+            Button {
+                router.showingQuickAdd = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                    Text("Add a purchase")
+                        .font(.subheadline.weight(.medium))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                router.showingScreenshotImport = true
+            } label: {
+                Image(systemName: "camera.viewfinder")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add from a screenshot")
+        }
+        .padding(.horizontal, 16)
     }
+}
+
+// Lets `sheet(item:)` drive off the transaction being categorized.
+extension Transaction: Identifiable {
+    var id: UUID { uuid }
 }
