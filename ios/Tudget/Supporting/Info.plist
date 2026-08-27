@@ -31,6 +31,21 @@
 	<key>UIUserInterfaceStyle</key>
 	<string>Automatic</string>
 
+	<!-- Widgets open the app by URL rather than by intent, so the scheme
+	     QuickAction builds has to be registered here or every widget tap is
+	     silently a no-op. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tudget</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- Attaching a receipt to a purchase. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pick a screenshot of a purchase notification, or attach a receipt photo to a purchase.</string>

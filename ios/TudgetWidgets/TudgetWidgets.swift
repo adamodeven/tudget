@@ -129,9 +129,11 @@ struct BudgetWidget: Widget {
         StaticConfiguration(kind: "TudgetBudgetWidget", provider: BudgetProvider()) { entry in
             BudgetWidgetView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
-                // Tapping anywhere goes straight to entry, because the point
-                // of seeing the number is usually that you're about to spend.
-                .widgetURL(QuickAction.quickAdd.url)
+                // Tapping goes straight to entry, because the point of seeing
+                // the number is usually that you're about to spend. The one
+                // exception is when you're already overspending, where the
+                // pace chart is the more useful place to land.
+                .widgetURL(entry.isBehindPace ? QuickAction.pace.url : QuickAction.quickAdd.url)
         }
         .configurationDisplayName("Budget")
         .description("What's left this cycle, and how your pace is going.")

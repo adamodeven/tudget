@@ -15,6 +15,19 @@ struct TudgetApp: App {
                 .environment(settings)
                 .environment(router)
                 .tint(.accentColor)
+                #if DEBUG
+                .task {
+                    if DebugSeed.isRequested {
+                        DebugSeed.run(
+                            context: ModelContext(LedgerStore.shared), settings: settings
+                        )
+                    }
+                    // Launch straight onto a given tab, so iterating on one
+                    // screen doesn't mean tapping through to it every time:
+                    //   SIMCTL_CHILD_TUDGET_TAB=pace
+                    if let tab = DebugSeed.requestedTab { router.tab = tab }
+                }
+                #endif
         }
         .modelContainer(LedgerStore.shared)
     }
@@ -50,6 +63,10 @@ final class AppRouter {
         case .screenshot:
             showingQuickAdd = false
             showingScreenshotImport = true
+        case .pace:
+            showingQuickAdd = false
+            showingScreenshotImport = false
+            tab = .pace
         }
     }
 

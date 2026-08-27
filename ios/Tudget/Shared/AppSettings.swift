@@ -1,23 +1,25 @@
 import Foundation
 import Observation
 
-/// User settings, stored in the shared App Group so the widgets and the share
-/// extension see exactly what the app sees.
+/// User settings, persisted to the shared App Group so the widgets and the
+/// share extension see exactly what the app sees.
 ///
-/// `@Observable` so SwiftUI re-renders on change, but every property reads and
-/// writes straight through to `UserDefaults` rather than caching -- an
-/// extension and the app can be alive at the same time, and a cached copy in
-/// either one would go stale.
+/// **These are stored properties that write through on `didSet`, not computed
+/// properties over `UserDefaults`.** That distinction is load-bearing:
+/// `@Observable` only generates change tracking for stored properties, so a
+/// computed-property version compiles, persists correctly, and silently never
+/// redraws anything -- which strands you on the setup screen when you finish
+/// setup, because the view reading `hasCompletedSetup` is never invalidated.
+///
+/// Each process loads its own copy at init. Nothing but the app writes
+/// settings, and extensions are short-lived, so a stale copy isn't reachable
+/// in practice; `reload()` is there for the case where it ever becomes so.
 @Observable
 final class AppSettings {
 
-    static let shared = AppSettings()
+    @MainActor static let shared = AppSettings()
 
-    private let defaults: UserDefaults
-
-    init(defaults: UserDefaults = AppGroup.defaults) {
-        self.defaults = defaults
-    }
+    @ObservationIgnored private let defaults: UserDefaults
 
     private enum Key {
         static let homeCurrency = "tudget.homeCurrency"
@@ -29,62 +31,75 @@ final class AppSettings {
         static let warnThreshold = "tudget.warnThreshold"
     }
 
-    // MARK: - Currency
+    // MARK: - Stored settings
 
-    /// The currency budgets are tracked in. Defaults to the device's, falling
-    /// back to USD.
+    /// The currency budgets are tracked in.
     var homeCurrencyCode: String {
-        get { defaults.string(forKey: Key.homeCurrency) ?? Currency.deviceCurrencyCode ?? "USD" }
-        set { defaults.set(newValue, forKey: Key.homeCurrency) }
+        didSet { defaults.set(homeCurrencyCode, forKey: Key.homeCurrency) }
     }
-
-    // MARK: - Budget period
 
     var periodLength: BudgetPeriodLength {
-        get {
-            guard let raw = defaults.string(forKey: Key.periodLength),
-                  let value = BudgetPeriodLength(rawValue: raw) else { return .biweekly }
-            return value
-        }
-        set { defaults.set(newValue.rawValue, forKey: Key.periodLength) }
+        didSet { defaults.set(periodLength.rawValue, forKey: Key.periodLength) }
     }
 
-    /// The day a cycle starts from. Defaults to the most recent Monday, and
-    /// every fortnight tiles forward and back from there.
+    /// The day a cycle starts from. Fortnights tile forward and back from here.
     var periodAnchor: Date {
-        get {
-            let stored = defaults.double(forKey: Key.periodAnchor)
-            guard stored > 0 else { return BudgetPeriodCalculator.mondayOnOrBefore(Date()) }
-            return Date(timeIntervalSince1970: stored)
-        }
-        set { defaults.set(newValue.timeIntervalSince1970, forKey: Key.periodAnchor) }
+        didSet { defaults.set(periodAnchor.timeIntervalSince1970, forKey: Key.periodAnchor) }
     }
 
     /// Take-home pay for one budget period, used to suggest limits in setup.
     var takeHomePerPeriod: Double {
-        get { defaults.double(forKey: Key.takeHomePerPeriod) }
-        set { defaults.set(newValue, forKey: Key.takeHomePerPeriod) }
+        didSet { defaults.set(takeHomePerPeriod, forKey: Key.takeHomePerPeriod) }
     }
 
     var hasCompletedSetup: Bool {
-        get { defaults.bool(forKey: Key.hasCompletedSetup) }
-        set { defaults.set(newValue, forKey: Key.hasCompletedSetup) }
+        didSet { defaults.set(hasCompletedSetup, forKey: Key.hasCompletedSetup) }
     }
 
-    // MARK: - Alerts
-
     var alertsEnabled: Bool {
-        get { defaults.object(forKey: Key.alertsEnabled) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Key.alertsEnabled) }
+        didSet { defaults.set(alertsEnabled, forKey: Key.alertsEnabled) }
     }
 
     /// Fraction of a category's limit at which it's worth saying something.
     var warnThreshold: Double {
-        get {
-            let stored = defaults.double(forKey: Key.warnThreshold)
-            return stored > 0 ? stored : 0.8
-        }
-        set { defaults.set(newValue, forKey: Key.warnThreshold) }
+        didSet { defaults.set(warnThreshold, forKey: Key.warnThreshold) }
+    }
+
+    // MARK: - Init
+
+    init(defaults: UserDefaults = AppGroup.defaults) {
+        self.defaults = defaults
+
+        self.homeCurrencyCode = defaults.string(forKey: Key.homeCurrency)
+            ?? Currency.deviceCurrencyCode ?? "USD"
+
+        self.periodLength = defaults.string(forKey: Key.periodLength)
+            .flatMap(BudgetPeriodLength.init(rawValue:)) ?? .biweekly
+
+        let storedAnchor = defaults.double(forKey: Key.periodAnchor)
+        self.periodAnchor = storedAnchor > 0
+            ? Date(timeIntervalSince1970: storedAnchor)
+            : BudgetPeriodCalculator.mondayOnOrBefore(Date())
+
+        self.takeHomePerPeriod = defaults.double(forKey: Key.takeHomePerPeriod)
+        self.hasCompletedSetup = defaults.bool(forKey: Key.hasCompletedSetup)
+        self.alertsEnabled = defaults.object(forKey: Key.alertsEnabled) as? Bool ?? true
+
+        let storedThreshold = defaults.double(forKey: Key.warnThreshold)
+        self.warnThreshold = storedThreshold > 0 ? storedThreshold : 0.8
+    }
+
+    /// Re-reads everything from disk, for the case where another process has
+    /// written since this copy was made.
+    func reload() {
+        let fresh = AppSettings(defaults: defaults)
+        homeCurrencyCode = fresh.homeCurrencyCode
+        periodLength = fresh.periodLength
+        periodAnchor = fresh.periodAnchor
+        takeHomePerPeriod = fresh.takeHomePerPeriod
+        hasCompletedSetup = fresh.hasCompletedSetup
+        alertsEnabled = fresh.alertsEnabled
+        warnThreshold = fresh.warnThreshold
     }
 
     // MARK: - Derived
@@ -105,10 +120,11 @@ final class AppSettings {
         )
     }
 
-    /// Resets everything -- used by "Start over" in Settings.
+    /// Clears everything -- used by "Start over" in Settings.
     func reset() {
         [Key.homeCurrency, Key.periodLength, Key.periodAnchor, Key.takeHomePerPeriod,
          Key.hasCompletedSetup, Key.alertsEnabled, Key.warnThreshold]
             .forEach(defaults.removeObject(forKey:))
+        reload()
     }
 }

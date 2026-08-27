@@ -9,6 +9,10 @@ import Foundation
 enum QuickAction: String, Sendable {
     case quickAdd
     case screenshot
+    /// Not a capture action -- opens the pace chart. The widget uses this
+    /// when you're overspending, because at that point "how bad is it" is a
+    /// more useful place to land than the entry field.
+    case pace
 
     private static let key = "tudget.pendingQuickAction"
 
