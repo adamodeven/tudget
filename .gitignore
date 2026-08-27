@@ -19,5 +19,16 @@ __pycache__/
 venv/
 *.egg-info/
 
+# iOS / Xcode
+# The project is generated from ios/project.yml by XcodeGen -- see ios/README.md.
+ios/Tudget.xcodeproj/
+ios/build/
+ios/DerivedData/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcarchive
+*.ipa
+*.dSYM.zip
+
 # OS
 .DS_Store

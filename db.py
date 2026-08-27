@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS categories (
 
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT,
     merchant TEXT NOT NULL,
     amount REAL NOT NULL,
     currency TEXT NOT NULL DEFAULT 'USD',
@@ -54,6 +55,8 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     processed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_client_id
+    ON transactions(client_id) WHERE client_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
 CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
 CREATE INDEX IF NOT EXISTS idx_pending_phone ON pending_categorizations(phone_number);
@@ -87,6 +90,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "transactions", "amount_default_currency"):
         conn.execute("ALTER TABLE transactions ADD COLUMN amount_default_currency REAL")
         conn.execute("UPDATE transactions SET amount_default_currency = amount WHERE amount_default_currency IS NULL")
+    if not _column_exists(conn, "transactions", "client_id"):
+        # The iOS app's own UUID for a transaction. Lets a re-sync update the
+        # existing row instead of creating a duplicate.
+        conn.execute("ALTER TABLE transactions ADD COLUMN client_id TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_client_id "
+            "ON transactions(client_id) WHERE client_id IS NOT NULL"
+        )
 
 
 def init_db() -> None:
@@ -179,6 +190,7 @@ def insert_transaction(
     source: str = "email",
     reconciled: bool = False,
     notion_page_id: str | None = None,
+    client_id: str | None = None,
 ) -> int:
     if amount_default_currency is None:
         amount_default_currency = amount
@@ -187,15 +199,25 @@ def insert_transaction(
             """
             INSERT INTO transactions
                 (merchant, amount, currency, amount_default_currency, card, category,
-                 receipt_path, timestamp, source, reconciled, notion_page_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 receipt_path, timestamp, source, reconciled, notion_page_id, client_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 merchant, amount, currency, amount_default_currency, card, category,
-                receipt_path, timestamp, source, int(reconciled), notion_page_id,
+                receipt_path, timestamp, source, int(reconciled), notion_page_id, client_id,
             ),
         )
         return cur.lastrowid
+
+
+def get_transaction_by_client_id(client_id: str) -> dict[str, Any] | None:
+    """Looks up a transaction by the iOS app's own UUID, so a re-sync updates
+    the existing row rather than duplicating it."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM transactions WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_transaction(transaction_id: int) -> dict[str, Any] | None:

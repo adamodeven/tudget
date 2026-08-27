@@ -113,6 +113,8 @@ def run_reconciliation(config: AppConfig, messaging_client) -> dict:
     else:
         message = f"Nightly check: all caught up, {matched_count} transaction(s) verified."
 
-    messaging_client.send(messaging.notify_target(config), message)
+    target = messaging.notify_target(config)
+    if target is not None:
+        messaging_client.send(target, message)
 
     return {"matched": matched_count, "missed": len(missed), "message": message}

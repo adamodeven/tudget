@@ -15,11 +15,21 @@ server:
   # linking receipt photos into Notion.
   base_url: "https://your-subdomain.ngrok-free.app"
 
-# Which channel Tudget uses to text you. "twilio" (SMS/MMS, works anywhere,
-# needs a Twilio account) or "imessage" (needs a Mac running BlueBubbles --
-# see the iMessage section in README before choosing this).
+# How Tudget reaches you.
+#   "twilio"   — SMS/MMS, works anywhere, needs a Twilio account
+#   "imessage" — needs a Mac running BlueBubbles (see README)
+#   "none"     — no texting at all; the iOS app is your front end and this
+#                server is just the Notion/Gmail/Plaid backend behind it.
+#                Requires api.enabled below.
 messaging:
-  channel: "twilio" # "twilio" | "imessage"
+  channel: "twilio" # "twilio" | "imessage" | "none"
+
+# JSON API the iOS app syncs into. Off unless you're using the app.
+# Generate a token with:
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+api:
+  enabled: false
+  token: ""
 
 phone:
   # Required when messaging.channel is "twilio". Your phone number in

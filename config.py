@@ -27,7 +27,10 @@ class PhoneConfig(BaseModel):
 
 
 class MessagingConfig(BaseModel):
-    channel: str = "twilio"  # "twilio" (SMS/MMS) or "imessage" (see imessage_client.py)
+    # "twilio" (SMS/MMS), "imessage" (see imessage_client.py), or "none" --
+    # "none" is what you want when the iOS app is your front end and the
+    # server is just the Notion/Gmail/Plaid backend behind it.
+    channel: str = "twilio"
 
 
 class GmailConfig(BaseModel):
@@ -82,6 +85,15 @@ class ReceiptsConfig(BaseModel):
     storage_dir: str = "data/receipts"
 
 
+class ApiConfig(BaseModel):
+    """JSON API the iOS app syncs into. Off unless you're using the app."""
+
+    enabled: bool = False
+    # Shared secret the app sends as `Authorization: Bearer <token>`.
+    # Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    token: str | None = None
+
+
 class CurrencyConfig(BaseModel):
     # All budgets/limits and cross-category totals are tracked in this
     # currency; purchases made in other currencies are converted to it
@@ -100,6 +112,7 @@ class AppConfig(BaseModel):
     plaid: PlaidConfig = Field(default_factory=PlaidConfig)
     receipts: ReceiptsConfig = Field(default_factory=ReceiptsConfig)
     currency: CurrencyConfig = Field(default_factory=CurrencyConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     bank_senders: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -118,8 +131,28 @@ class AppConfig(BaseModel):
                 raise ValueError(
                     f"messaging.channel is 'imessage' but imessage.{missing[0]} is not set"
                 )
+        elif self.messaging.channel == "none":
+            # No outbound texting: the iOS app is the front end. Nothing to
+            # validate, but there'd be no way to reach the user without the
+            # API, so make that an explicit requirement rather than a silent
+            # dead end.
+            if not self.api.enabled:
+                raise ValueError(
+                    "messaging.channel is 'none', so nothing can reach you -- "
+                    "enable the API (api.enabled: true) for the iOS app, or pick "
+                    "a messaging channel"
+                )
         else:
-            raise ValueError(f"messaging.channel must be 'twilio' or 'imessage', got {self.messaging.channel!r}")
+            raise ValueError(
+                f"messaging.channel must be 'twilio', 'imessage', or 'none', "
+                f"got {self.messaging.channel!r}"
+            )
+
+        if self.api.enabled and not self.api.token:
+            raise ValueError(
+                "api.enabled is true but api.token is not set -- generate one with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            )
 
         if self.gmail.enabled and not self.bank_senders:
             raise ValueError("gmail.enabled is true but bank_senders is empty")

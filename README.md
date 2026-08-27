@@ -2,26 +2,39 @@
 
 Tudget. Text budget.
 
-A self-hosted budget tracker you text (or iMessage) purchases to. Text a
-merchant and amount, or just send a screenshot of a bank/payment-app
-notification, and Tudget logs it, asks you to categorize it, and replies
-with what's left in your budget. Any currency works — foreign-currency
-purchases are converted to your home currency for budget totals. Notion is
-your dashboard and budget config.
+A personal budget tracker built around one idea: logging a purchase should
+take two taps, in whatever currency you spent.
 
-Everything above works standalone, with nothing watching your accounts —
-you tell Tudget about a purchase, it doesn't go looking for one. Real-time
-detection is optional and layered on top:
+There are two ways to run it, and they work together:
 
-- **Gmail polling** parses bank transaction-alert emails and texts you
-  automatically (off by default).
+### 📱 [The iOS app](ios/) — start here
+
+A native SwiftUI app you install from TestFlight. Type `Trader Joe's $34
+groceries`, or share a screenshot of a bank notification straight from the
+share sheet and let on-device OCR read it. Budgets by category, any
+currency, everything stored on your phone. **No server required.**
+
+→ **[Build and TestFlight instructions](ios/README.md)**
+
+### 💬 The server — texting, Notion, and bank automation
+
+A self-hosted FastAPI service you text (or iMessage) purchases to, with a
+Notion dashboard and the two things a phone can't do on its own:
+
+- **Gmail polling** parses bank transaction-alert emails automatically
+  (off by default).
 - **Plaid** runs a nightly check across linked accounts to catch anything
   email parsing missed (off by default).
 
-The eventual goal is to skip typing/screenshotting entirely by
-intercepting bank-app push notifications straight off an Android phone and
-firing the same flow automatically — that's future work. For now, manual
-and screenshot entry is the whole loop, and it's fully usable on its own.
+Run it alongside the app (set `messaging.channel: "none"` and enable the
+API — see [Syncing](ios/README.md#optional-syncing-to-the-python-server)),
+or on its own as a pure SMS bot. The rest of this README covers the server.
+
+> **On automatic notification capture:** iOS provides no API for one app to
+> read another app's notifications, so full push interception is
+> Android-only. On iPhone the share extension covers manual capture, and
+> the server's Gmail/Plaid automation covers the rest — details in the
+> [app README](ios/README.md#a-note-on-automatic-capture).
 
 ## How it works
 
@@ -46,10 +59,12 @@ and screenshot entry is the whole loop, and it's fully usable on its own.
 
 ```
 tudget/
+  ios/                  # the iOS app — see ios/README.md
   main.py               # FastAPI app, webhooks, background jobs
+  api.py                 # optional: JSON API the iOS app syncs into
   inbound.py             # channel-agnostic message handling: category matching,
                           # manual-entry parsing, screenshot handoff to ocr.py
-  messaging.py            # picks the Twilio or iMessage client from config
+  messaging.py            # picks the Twilio, iMessage, or null client from config
   twilio_client.py        # Twilio SMS/MMS transport (send + download media)
   imessage_client.py      # iMessage transport via BlueBubbles (send + webhook parsing)
   currency.py              # amount/currency parsing, formatting, live FX conversion
@@ -166,7 +181,32 @@ commit `config.yaml`** — it's gitignored on purpose.
 
 ## 3. Pick a messaging channel
 
-Set `messaging.channel` in `config.yaml` to `"twilio"` or `"imessage"`.
+Set `messaging.channel` in `config.yaml` to `"twilio"`, `"imessage"`, or
+`"none"`.
+
+### No messaging (the iOS app is your front end)
+
+If you're using [the app](ios/), the server doesn't need to text you at all
+— it just needs to accept purchases from the app and keep Notion, Gmail
+parsing, and Plaid running behind it:
+
+```yaml
+messaging:
+  channel: "none"
+api:
+  enabled: true
+  token: "<generate one, see below>"
+```
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Then put the same URL and token into the app under Settings → *Sync to my
+server*. The API exposes `GET /api/health`, `GET /api/categories`, and
+`POST /api/transactions`, all behind that bearer token. Transactions carry
+the app's own UUID, so re-syncing updates rather than duplicates. Skip the
+Twilio and iMessage sections below.
 
 ### Twilio setup (SMS/MMS)
 

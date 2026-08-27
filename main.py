@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, Form, Response
 from fastapi.staticfiles import StaticFiles
 from twilio.twiml.messaging_response import MessagingResponse
 
+import api
 import currency
 import db
 import gmail_poller
@@ -47,7 +48,17 @@ async def on_new_transaction(parsed: dict) -> None:
         timestamp=datetime.now().isoformat(),
         source="email",
     )
+
     target = messaging.notify_target(config)
+    if target is None:
+        # No messaging channel: the iOS app picks this up over the API and
+        # categorizes it there, so there's no pending reply to track.
+        logger.info(
+            "Logged %s %s from email; no messaging channel, app will pick it up",
+            parsed["merchant"], parsed["amount"],
+        )
+        return
+
     db.create_pending_categorization(transaction_id, target)
 
     categories = db.get_categories()
@@ -110,6 +121,10 @@ app = FastAPI(lifespan=lifespan)
 
 Path(config.receipts.storage_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/receipts", StaticFiles(directory=config.receipts.storage_dir), name="receipts")
+
+if config.api.enabled:
+    app.include_router(api.build_router(config))
+    logger.info("App sync API enabled at /api")
 
 
 @app.get("/health")
