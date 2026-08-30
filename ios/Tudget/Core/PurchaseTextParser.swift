@@ -94,8 +94,12 @@ enum PurchaseTextParser {
 
     private static let merchantPatterns: [NSRegularExpression] = {
         let patterns = [
-            // "You made a $12.47 purchase at TARGET T-1234 on your card..."
-            #"(?:at|with|to|from)\s+([A-Z0-9][\w &'\.\-#]{1,40}?)(?=\s+(?:on|for|using|ending|with)\b|[,\.\n]|$)"#,
+            // "You made a $12.47 purchase at TARGET T-1234 on your card..." --
+            // periods and commas are allowed inside the name itself (business
+            // suffixes like "CO., LTD." are common) since the name only ends
+            // at a boilerplate keyword, a status marker ("*PENDING"), or the
+            // end of the text.
+            #"(?:at|with|to|from)\s+([A-Z0-9][\w &'\.\-#,]{1,50}?)(?=\s+(?:on|for|using|ending|with)\b|\s*\*|\n|$)"#,
             // "New transaction: $12.47 - STARBUCKS"
             #"[:\-]\s*([A-Z][\w &'\.\-#]{2,40})\s*$"#,
         ]

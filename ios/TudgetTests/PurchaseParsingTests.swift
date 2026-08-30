@@ -108,6 +108,18 @@ final class NotificationParsingTests: XCTestCase {
         let result = try XCTUnwrap(parse("A $15.00 charge was posted to your account"))
         XCTAssertNotEqual(result.merchant?.lowercased(), "your")
     }
+
+    /// A business suffix like "CO., LTD." must not truncate the merchant at
+    /// its first period -- the whole name is the merchant, not just "CO".
+    func testMerchantWithBusinessSuffixIsNotTruncated() throws {
+        let result = try XCTUnwrap(
+            parse("SoFi Credit Card 16m ago $94.60 spent at CO., LTD. TRINITY AI *PENDING")
+        )
+        XCTAssertEqual(result.amount, 94.60, accuracy: 0.001)
+        let merchant = try XCTUnwrap(result.merchant)
+        XCTAssertTrue(merchant.contains("TRINITY"), "expected the full name, got \"\(merchant)\"")
+        XCTAssertNotEqual(merchant, "CO")
+    }
 }
 
 final class CategoryMatcherTests: XCTestCase {

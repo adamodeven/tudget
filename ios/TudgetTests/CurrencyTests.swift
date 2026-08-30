@@ -75,6 +75,27 @@ final class CurrencyParserTests: XCTestCase {
         XCTAssertNil(CurrencyParser.parseNumber("abc"))
     }
 
+    /// A bare number earlier in the text -- a date, a relative timestamp --
+    /// must not shadow the real, currency-marked amount that follows it.
+    func testMarkedAmountIsPreferredOverEarlierBareNumber() throws {
+        let result = try XCTUnwrap(
+            parse("NUS FOODCOURT NUS - ST Aug 29, 2026 $4.57")
+        )
+        XCTAssertEqual(result.amount, 4.57, accuracy: 0.001)
+        XCTAssertEqual(result.currencyCode, "USD")
+    }
+
+    /// Same failure mode as the date case, but with a relative timestamp
+    /// ("16m ago") ahead of the amount, as seen in a notification banner
+    /// screenshot.
+    func testMarkedAmountIsPreferredOverPrecedingDuration() throws {
+        let result = try XCTUnwrap(
+            parse("SoFi Credit Card 16m ago $94.60 spent at CO., LTD.")
+        )
+        XCTAssertEqual(result.amount, 94.60, accuracy: 0.001)
+        XCTAssertEqual(result.currencyCode, "USD")
+    }
+
     /// The reported range must cover the symbol too, or stripping the amount
     /// out leaves a stray "€" in the merchant name.
     func testRangeIncludesSymbol() throws {

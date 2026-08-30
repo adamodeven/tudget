@@ -12,6 +12,7 @@ struct TransactionDetailView: View {
     @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
 
     @State private var showingDeleteConfirmation = false
+    @State private var showingEdit = false
 
     var body: some View {
         ScrollView {
@@ -30,6 +31,14 @@ struct TransactionDetailView: View {
         .background(AmbientBackground(tint: transaction.category?.tint.color ?? .blue))
         .navigationTitle(transaction.displayMerchant)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Edit") { showingEdit = true }
+            }
+        }
+        .sheet(isPresented: $showingEdit) {
+            EditPurchaseView(transaction: transaction)
+        }
         .confirmationDialog(
             "Delete this purchase?",
             isPresented: $showingDeleteConfirmation,
@@ -247,5 +256,150 @@ struct CategoryDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .glassCard()
+    }
+}
+
+/// Edits a purchase already in the ledger.
+///
+/// Reuses the same field vocabulary as the screenshot-import draft screen --
+/// merchant, amount, currency -- plus category, date, and note, since none of
+/// those are fixed once a purchase has landed.
+struct EditPurchaseView: View {
+
+    let transaction: Transaction
+
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+
+    @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
+
+    @State private var merchant: String
+    @State private var amountText: String
+    @State private var currencyCode: String
+    @State private var pickedCategory: BudgetCategory?
+    @State private var date: Date
+    @State private var note: String
+    @State private var isSaving = false
+
+    init(transaction: Transaction) {
+        self.transaction = transaction
+        _merchant = State(initialValue: transaction.merchant)
+        _amountText = State(initialValue: String(format: "%.2f", transaction.amount))
+        _currencyCode = State(initialValue: transaction.currencyCode)
+        _pickedCategory = State(initialValue: transaction.category)
+        _date = State(initialValue: transaction.timestamp)
+        _note = State(initialValue: transaction.note ?? "")
+    }
+
+    private var amount: Double { CurrencyParser.parseNumber(amountText) ?? 0 }
+    private var canSave: Bool { amount > 0 && !isSaving }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: Theme.Metric.cardSpacing) {
+                    fieldsCard
+                    categoryPicker
+                    DatePicker("When", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                        .padding(.horizontal, 4)
+                        .glassCard(radius: Theme.Metric.tightRadius)
+                    TextField("Note", text: $note)
+                        .padding(.horizontal, 4)
+                        .glassCard(radius: Theme.Metric.tightRadius)
+                }
+                .padding(Theme.Metric.gutter)
+            }
+            .background(AmbientBackground(tint: pickedCategory?.tint.color ?? .blue))
+            .navigationTitle("Edit purchase")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }
+                        .disabled(!canSave)
+                        .buttonStyle(.glassProminent)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(.regularMaterial)
+    }
+
+    private var fieldsCard: some View {
+        VStack(spacing: 10) {
+            LabeledContent("Merchant") {
+                TextField("Where", text: $merchant)
+                    .multilineTextAlignment(.trailing)
+            }
+            Divider()
+            LabeledContent("Amount") {
+                TextField("0", text: $amountText)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .monospacedDigit()
+            }
+            Divider()
+            LabeledContent("Currency") {
+                Picker("", selection: $currencyCode) {
+                    ForEach(Currency.pickerCodes(deviceCode: Currency.deviceCurrencyCode), id: \.self) {
+                        Text($0).tag($0)
+                    }
+                }
+                .labelsHidden()
+            }
+        }
+        .font(.subheadline)
+        .glassCard()
+    }
+
+    private var categoryPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Category").font(.subheadline.weight(.semibold))
+
+            GlassEffectContainer(spacing: 8) {
+                FlowLayout(spacing: 8) {
+                    ForEach(categories) { category in
+                        let isSelected = pickedCategory?.uuid == category.uuid
+                        Button {
+                            withAnimation(.smooth) {
+                                pickedCategory = isSelected ? nil : category
+                            }
+                        } label: {
+                            Text(category.displayName)
+                                .font(.subheadline)
+                                .fontWeight(isSelected ? .semibold : .regular)
+                                .glassChip(tint: category.tint.color, selected: isSelected)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private func save() async {
+        guard amount > 0 else { return }
+        isSaving = true
+
+        await Ledger.update(
+            transaction,
+            merchant: merchant,
+            amount: amount,
+            currencyCode: currencyCode,
+            category: pickedCategory,
+            note: note.isEmpty ? nil : note,
+            timestamp: date,
+            context: context,
+            settings: settings
+        )
+
+        await BudgetNotifier.shared.refreshAlerts(context: context, settings: settings)
+
+        dismiss()
     }
 }

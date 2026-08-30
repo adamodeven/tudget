@@ -305,5 +305,6 @@ struct CategoryTile: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .tintedGlassCard(budget.tint.color, radius: Theme.Metric.tightRadius)
+        .contentShape(.rect)
     }
 }

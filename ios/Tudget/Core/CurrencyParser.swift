@@ -58,13 +58,18 @@ enum CurrencyParser {
         return Double(text)
     }
 
-    /// Finds the first amount in `text`, falling back to `defaultCurrency` when
-    /// no symbol or ISO code is attached to it.
+    /// Finds the amount in `text` that actually looks like money -- one with a
+    /// symbol or ISO code attached -- scanning every number before settling
+    /// for a bare one. Without that preference, the first digits in the text
+    /// win even when they're a date or a relative timestamp ("Aug 29", "16m
+    /// ago") sitting ahead of the real, marked amount.
     static func findAmount(in text: String, defaultCurrency: String) -> ParsedAmount? {
         let ns = text as NSString
         let matches = numberRegex.matches(
             in: text, range: NSRange(location: 0, length: ns.length)
         )
+
+        var fallback: ParsedAmount?
 
         for match in matches {
             guard let numberRange = Range(match.range, in: text) else { continue }
@@ -95,12 +100,14 @@ enum CurrencyParser {
                 )
             }
 
-            return ParsedAmount(
-                value: value, currencyCode: defaultCurrency, range: numberRange
-            )
+            if fallback == nil {
+                fallback = ParsedAmount(
+                    value: value, currencyCode: defaultCurrency, range: numberRange
+                )
+            }
         }
 
-        return nil
+        return fallback
     }
 
     /// Convenience for callers that don't need the range.

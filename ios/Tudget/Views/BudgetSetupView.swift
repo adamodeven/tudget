@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// First-run setup: currency, cycle, pay, limits.
 ///
@@ -46,6 +47,7 @@ struct BudgetSetupView: View {
                 .padding(Theme.Metric.gutter)
                 .padding(.bottom, 40)
             }
+            .scrollDismissesKeyboard(.immediately)
             .background(AmbientBackground(tint: .blue))
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -234,6 +236,7 @@ struct BudgetSetupView: View {
                 LimitEditor(
                     template: template,
                     currencyCode: currencyCode,
+                    maxValue: takeHome,
                     value: Binding(
                         get: { limits[template.name] ?? 0 },
                         set: { limits[template.name] = $0 }
@@ -291,7 +294,12 @@ private struct LimitEditor: View {
 
     let template: BudgetCategory.Template
     let currencyCode: String
+    let maxValue: Double
     @Binding var value: Double
+
+    @State private var isEditingText = false
+    @State private var editText = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(spacing: 8) {
@@ -299,15 +307,204 @@ private struct LimitEditor: View {
                 Text("\(template.emoji) \(template.name)")
                     .font(.subheadline.weight(.medium))
                 Spacer()
-                Text(Currency.formatCompact(value, code: currencyCode))
-                    .font(.subheadline.weight(.semibold))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+                if isEditingText {
+                    TextField("0", text: $editText)
+                        .keyboardType(.decimalPad)
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                        .focused($isFocused)
+                        .onSubmit { commitEdit() }
+                } else {
+                    Text(Currency.formatCompact(value, code: currencyCode))
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .onTapGesture { beginEdit() }
+                }
             }
 
-            Slider(value: $value, in: 0...max(50, value * 2.5), step: 5)
-                .tint(template.tint.color)
+            // Range is 0...takeHome: a single category can't sensibly exceed
+            // the whole cycle's income, and a fixed range (rather than one
+            // derived from the live value) keeps the thumb's position honest.
+            PrecisionSlider(
+                value: $value,
+                range: 0...max(1, maxValue),
+                step: 5,
+                tint: template.tint.color,
+                currencyCode: currencyCode
+            )
         }
         .glassCard(radius: Theme.Metric.tightRadius)
+        .onChange(of: isFocused) { _, focused in
+            if !focused && isEditingText { commitEdit() }
+        }
+    }
+
+    private func beginEdit() {
+        editText = Currency.formatCompact(value, code: currencyCode)
+            .filter { $0.isNumber || $0 == "." }
+        isEditingText = true
+        isFocused = true
+    }
+
+    private func commitEdit() {
+        let parsed = CurrencyParser.parseNumber(editText) ?? value
+        value = min(max(0, parsed), maxValue)
+        isEditingText = false
+        isFocused = false
+    }
+}
+
+/// A slider that, like the scrubber in Photos/TV, rescales itself for
+/// precise adjustment: hold your finger still (whether right on touch-down
+/// or mid-drag) and after a beat the track zooms in around the current
+/// value, trading range for precision until you lift.
+private struct PrecisionSlider: View {
+
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let tint: Color
+    let currencyCode: String
+
+    private let trackHeight: CGFloat = 6
+    private let thumbDiameter: CGFloat = 26
+    private let hitDiameter: CGFloat = 44
+    private let trackSpace = "PrecisionSlider.track"
+    private let holdDuration: Duration = .milliseconds(450)
+    private let zoomFactor: Double = 8
+
+    @State private var isZoomed = false
+    @State private var zoomRange: ClosedRange<Double>
+    @State private var holdTask: Task<Void, Never>?
+
+    init(value: Binding<Double>, range: ClosedRange<Double>, step: Double, tint: Color, currencyCode: String) {
+        self._value = value
+        self.range = range
+        self.step = step
+        self.tint = tint
+        self.currencyCode = currencyCode
+        self._zoomRange = State(initialValue: range)
+    }
+
+    private var activeRange: ClosedRange<Double> { isZoomed ? zoomRange : range }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            if isZoomed {
+                HStack {
+                    Text(Currency.formatCompact(zoomRange.lowerBound, code: currencyCode))
+                    Spacer()
+                    Text("fine adjust")
+                    Spacer()
+                    Text(Currency.formatCompact(zoomRange.upperBound, code: currencyCode))
+                }
+                .font(.caption2)
+                .foregroundStyle(tint)
+                .transition(.opacity)
+            }
+
+            GeometryReader { geo in
+                let width = geo.size.width
+                let fraction = normalizedFraction(value, in: activeRange)
+                let thumbX = width * fraction
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.25))
+                        .frame(height: trackHeight)
+
+                    Capsule()
+                        .fill(tint)
+                        .frame(width: max(trackHeight, thumbX), height: trackHeight)
+
+                    // The hit target is deliberately larger than the visible
+                    // dot -- and it's the *only* thing that responds to
+                    // touches, so tapping elsewhere on the track no longer
+                    // yanks the value around.
+                    Circle()
+                        .fill(.white)
+                        .shadow(radius: isZoomed ? 4 : 1)
+                        .frame(width: thumbDiameter, height: thumbDiameter)
+                        .scaleEffect(isZoomed ? 1.15 : 1)
+                        .frame(width: hitDiameter, height: hitDiameter)
+                        .contentShape(Circle())
+                        .offset(x: thumbX - hitDiameter / 2)
+                        .gesture(
+                            DragGesture(minimumDistance: 0, coordinateSpace: .named(trackSpace))
+                                .onChanged { drag in handleDrag(drag, width: width) }
+                                .onEnded { _ in handleDragEnd() }
+                        )
+                }
+                .frame(height: max(thumbDiameter, hitDiameter))
+                .coordinateSpace(name: trackSpace)
+            }
+            .frame(height: max(thumbDiameter, hitDiameter))
+        }
+        .animation(.easeInOut(duration: 0.25), value: isZoomed)
+    }
+
+    private func normalizedFraction(_ value: Double, in range: ClosedRange<Double>) -> CGFloat {
+        guard range.upperBound > range.lowerBound else { return 0 }
+        let clamped = min(max(value, range.lowerBound), range.upperBound)
+        return CGFloat((clamped - range.lowerBound) / (range.upperBound - range.lowerBound))
+    }
+
+    private func handleDrag(_ drag: DragGesture.Value, width: CGFloat) {
+        guard width > 0 else { return }
+        let fraction = min(max(drag.location.x / width, 0), 1)
+        let active = activeRange
+        let raw = active.lowerBound + Double(fraction) * (active.upperBound - active.lowerBound)
+        let stepped = (raw / step).rounded() * step
+        value = min(max(stepped, range.lowerBound), range.upperBound)
+
+        // Any movement pushes back the moment zoom engages; it only fires
+        // once the finger has been still for `holdDuration`, so this works
+        // whether you pause right on touch-down or mid-drag.
+        holdTask?.cancel()
+        if !isZoomed {
+            holdTask = Task {
+                try? await Task.sleep(for: holdDuration)
+                guard !Task.isCancelled else { return }
+                await MainActor.run { enterZoom() }
+            }
+        }
+    }
+
+    private func handleDragEnd() {
+        holdTask?.cancel()
+        holdTask = nil
+        if isZoomed {
+            isZoomed = false
+            zoomRange = range
+        }
+    }
+
+    private func enterZoom() {
+        guard !isZoomed else { return }
+        let fullSpan = range.upperBound - range.lowerBound
+        guard fullSpan > 0 else { return }
+        let zoomSpan = min(fullSpan, max(fullSpan / zoomFactor, step * 4))
+
+        // Anchor the zoomed window so the value's fraction across it matches
+        // its fraction across the full range -- the point under the finger
+        // doesn't jump, only the scale around it changes.
+        let fraction = Double(normalizedFraction(value, in: range))
+        var lower = value - fraction * zoomSpan
+        var upper = lower + zoomSpan
+        if lower < range.lowerBound {
+            upper += range.lowerBound - lower
+            lower = range.lowerBound
+        }
+        if upper > range.upperBound {
+            lower -= upper - range.upperBound
+            upper = range.upperBound
+        }
+
+        zoomRange = lower...upper
+        isZoomed = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 }

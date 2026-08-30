@@ -165,6 +165,38 @@ enum Ledger {
         save(context)
     }
 
+    /// Edits a purchase already in the ledger, re-converting into the home
+    /// currency the same way `record` does -- so changing the amount or
+    /// currency on an old purchase doesn't leave it counted against the
+    /// budget at its stale converted value.
+    @discardableResult
+    static func update(
+        _ transaction: Transaction,
+        merchant: String,
+        amount: Double,
+        currencyCode: String,
+        category: BudgetCategory?,
+        note: String?,
+        timestamp: Date,
+        context: ModelContext,
+        settings: AppSettings
+    ) async -> Transaction {
+        let home = settings.homeCurrencyCode
+        let converted = await FXRateService.shared.convert(amount, from: currencyCode, to: home)
+
+        transaction.merchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        transaction.amount = amount
+        transaction.currencyCode = currencyCode
+        transaction.amountInHomeCurrency = converted
+        transaction.homeCurrencyCode = home
+        transaction.category = category
+        transaction.note = note
+        transaction.timestamp = timestamp
+
+        save(context)
+        return transaction
+    }
+
     static func delete(_ transaction: Transaction, context: ModelContext) {
         if let filename = transaction.receiptFilename {
             AppGroup.deleteReceipt(filename)

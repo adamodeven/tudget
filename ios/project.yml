@@ -16,11 +16,13 @@ options:
 
 # ---------------------------------------------------------------------------
 # The two lines you'd change to build this under a different account.
+# The &TEAM anchor lets the target `attributes` blocks below reuse this same
+# value, so it's still only set in one place.
 # ---------------------------------------------------------------------------
 settings:
   base:
     APP_BUNDLE_ID: com.adamodeven.tudget
-    DEVELOPMENT_TEAM: "2VT8NJTJY6"
+    DEVELOPMENT_TEAM: &TEAM "2VT8NJTJY6"
 
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
@@ -50,6 +52,14 @@ targets:
   Tudget:
     type: application
     platform: iOS
+    # DEVELOPMENT_TEAM (the build setting, above) is what xcodebuild reads.
+    # attributes.DevelopmentTeam is the separate PBXProject TargetAttributes
+    # entry that Xcode's own Signing & Capabilities UI writes when you pick a
+    # team from the dropdown -- without it, automatic signing can't resolve
+    # and every `xcodegen generate` silently undoes a manual fix in Xcode.
+    attributes:
+      DevelopmentTeam: *TEAM
+      ProvisioningStyle: Automatic
     sources:
       - path: Tudget
         excludes:
@@ -75,6 +85,9 @@ targets:
   TudgetShare:
     type: app-extension
     platform: iOS
+    attributes:
+      DevelopmentTeam: *TEAM
+      ProvisioningStyle: Automatic
     templates: [SharedLogic]
     sources:
       - path: TudgetShare
@@ -94,6 +107,9 @@ targets:
   TudgetWidgets:
     type: app-extension
     platform: iOS
+    attributes:
+      DevelopmentTeam: *TEAM
+      ProvisioningStyle: Automatic
     templates: [SharedLogic]
     sources:
       - path: TudgetWidgets
@@ -113,6 +129,9 @@ targets:
   TudgetTests:
     type: bundle.unit-test
     platform: iOS
+    attributes:
+      DevelopmentTeam: *TEAM
+      ProvisioningStyle: Automatic
     sources:
       - path: TudgetTests
     dependencies:
