@@ -1,10 +1,12 @@
 import AppIntents
 
-/// Opens the app straight into the one-line purchase entry.
+/// Opens the app straight into the purchase fields.
 ///
 /// Used by the Control Centre button, the Lock Screen control, and Siri. It
 /// can't present the app's sheet itself, so it leaves a request in the shared
-/// App Group and the app picks it up as it becomes active.
+/// App Group and the app picks it up as it becomes active -- and it lands on
+/// the fields rather than the mic, because nothing out here can hold the
+/// capture bar down.
 struct OpenQuickAddIntent: AppIntent {
 
     static let title: LocalizedStringResource = "Add a Purchase"
@@ -13,7 +15,7 @@ struct OpenQuickAddIntent: AppIntent {
         categoryName: "Capture"
     )
 
-    /// The whole point: get to the keyboard, not to a launch screen.
+    /// The whole point: get to the fields, not to a launch screen.
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult {

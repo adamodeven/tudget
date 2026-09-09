@@ -66,9 +66,16 @@ xcodebuild test -project Tudget.xcodeproj -scheme Tudget \
 per cycle, and category limits, seeded from a modified 50/30/20 split. Change
 any of it later in Settings.
 
-**Type a purchase.** Tap *Add a purchase* — from the bar above the tab bar,
-the Control Centre button, or a widget. One line does it:
-`Trader Joe's $34 groceries`. What it understood is shown before you commit.
+**Say a purchase.** Hold the bar above the tab bar and talk — *"twelve forty
+at Blue Bottle on food"* — then let go. The mic is open only while your thumb
+is down, and recognition stays on the phone. Letting go shows what was heard
+and what was made of it, with **Yes** and **Edit**; nothing reaches the ledger
+until you've answered.
+
+**Type one instead.** Slide up on that same bar for two fields — an amount on
+the decimal pad and a merchant — rather than one line you have to phrase
+correctly. A plain tap goes there too, as do the Control Centre button and the
+widgets, which can't hold a button down.
 
 **From a screenshot.** Screenshot the bank alert → Share → Tudget. Vision
 reads it on device, you tap a category, and it's in the ledger before the
@@ -96,7 +103,7 @@ ios/
     Core/                        pure logic, compiled into every target
       Currency.swift             symbols, codes, formatting
       CurrencyParser.swift       "€12,47" -> (12.47, EUR)
-      PurchaseTextParser.swift   typed entry + OCR'd notification text
+      PurchaseTextParser.swift   typed + spoken entry, OCR'd notification text
       CategoryMatcher.swift      "grub" -> Food, with typo tolerance
       BudgetPeriod.swift         fortnightly cycles anchored to a Monday
       BudgetCalculator.swift     spend / remaining / totals
@@ -105,12 +112,13 @@ ios/
       VisionOCR.swift            screenshot -> text, on device
     Models/                      SwiftData: Transaction, BudgetCategory, Ledger
     Views/                       dashboard, pace, add, history, setup, settings
+    Voice/                       hold-to-talk dictation, on device
     Shared/                      App Group: store, settings, quick actions
     Intents/                     App Intents behind Control Centre & Siri
     Notifications/               budget alerts
   TudgetShare/                   share extension
   TudgetWidgets/                 widgets + Control Centre controls
-  TudgetTests/                   62 tests over Core/
+  TudgetTests/                   85 tests over Core/
 ```
 
 `Core/`, `Models/`, `Shared/`, and `Intents/` compile into the app, the share

@@ -48,6 +48,18 @@ struct PaceView: View {
 
     private var statusColor: Color { Theme.color(for: projection.pace) }
 
+    /// The three line styles, defined once and used by both the plot and the
+    /// key below it -- that's what keeps the key honest.
+    private enum Stroke {
+        static let spent = StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+        static let projected = StrokeStyle(lineWidth: 2, dash: [5, 4])
+        static let evenPace = StrokeStyle(lineWidth: 1.5, dash: [2, 5])
+    }
+
+    /// Even-pace grey. A concrete colour rather than `.tertiary` so the key
+    /// swatch resolves to exactly what the plot draws.
+    private static let evenPaceColor = Color.secondary.opacity(0.55)
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -81,7 +93,7 @@ struct PaceView: View {
             }
             .foregroundStyle(statusColor)
 
-            Text(projection.summarySentence())
+            Text(projection.summaryLine())
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -134,8 +146,8 @@ struct PaceView: View {
                     y: .value("Spend", point.amount),
                     series: .value("Series", "Even pace")
                 )
-                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [2, 5]))
-                .foregroundStyle(.tertiary)
+                .lineStyle(Stroke.evenPace)
+                .foregroundStyle(Self.evenPaceColor)
             }
 
             // What's actually been spent.
@@ -145,7 +157,7 @@ struct PaceView: View {
                     y: .value("Spend", point.amount),
                     series: .value("Series", "Spent")
                 )
-                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .lineStyle(Stroke.spent)
                 .foregroundStyle(statusColor)
                 .interpolationMethod(.monotone)
 
@@ -164,14 +176,14 @@ struct PaceView: View {
             }
 
             // Where the current pace takes you: same colour, dashed, because
-            // it's the same measure — just not a fact yet.
+            // it's the same measure, just not a fact yet.
             ForEach(projection.projectedSeries) { point in
                 LineMark(
                     x: .value("Day", point.date),
                     y: .value("Spend", point.amount),
                     series: .value("Series", "Projected")
                 )
-                .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                .lineStyle(Stroke.projected)
                 .foregroundStyle(statusColor.opacity(0.65))
             }
 
@@ -183,11 +195,6 @@ struct PaceView: View {
                 )
                 .symbolSize(90)
                 .foregroundStyle(statusColor)
-                .annotation(position: .topTrailing, spacing: 4) {
-                    Text("Out")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(statusColor)
-                }
             }
 
             if let selectedDate, let value = amount(on: selectedDate) {
@@ -209,6 +216,7 @@ struct PaceView: View {
             }
         }
         .chartXSelection(value: $selectedDate)
+        .chartXScale(domain: period.start...period.lastDay())
         .chartYAxis {
             AxisMarks(position: .leading) { value in
                 AxisGridLine().foregroundStyle(.quaternary)
@@ -222,18 +230,48 @@ struct PaceView: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: strideDays)) { value in
+            AxisMarks(values: xAxisDates) { value in
                 AxisGridLine().foregroundStyle(.quaternary)
-                AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                if let date = value.as(Date.self) {
+                    // The final tick is the end of the period, so it sits on
+                    // the plot's right edge, where a centred label hangs off
+                    // and gets clipped to "Se...". Anchoring it trailing sets
+                    // its right edge against the tick and moves it inward.
+                    AxisValueLabel(anchor: date == xAxisDates.last ? .topTrailing : .top) {
+                        Text(date, format: .dateTime.month(.abbreviated).day())
+                    }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                }
             }
         }
     }
 
-    /// Enough gridlines to read, few enough that the labels don't collide.
-    private var strideDays: Int {
-        period.dayCount() > 20 ? 5 : 3
+    /// The gridline dates, walked *backwards* from the last day so the axis
+    /// always ends on the end of the period rather than stopping a few days
+    /// short of it.
+    ///
+    /// At most five labels: enough to read the axis, few enough that they
+    /// never collide. That matters more here than it normally would, because
+    /// the last label is right-aligned and so reaches further left than a
+    /// centred one does.
+    private var xAxisDates: [Date] {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: period.start)
+        let last = calendar.startOfDay(for: period.lastDay())
+        let span = max(1, calendar.dateComponents([.day], from: start, to: last).day ?? 1)
+        let strideDays = max(1, Int((Double(span) / 4).rounded(.up)))
+
+        var dates: [Date] = []
+        var day = last
+
+        while day >= start {
+            dates.append(day)
+            guard let previous = calendar.date(byAdding: .day, value: -strideDays, to: day) else { break }
+            day = previous
+        }
+
+        return dates.reversed()
     }
 
     private func amount(on date: Date) -> Double? {
@@ -249,28 +287,34 @@ struct PaceView: View {
     /// Three series share the plot, so a legend is always present.
     private var legend: some View {
         HStack(spacing: 14) {
-            legendItem(color: statusColor, dashed: false, label: "Spent")
-            legendItem(color: statusColor.opacity(0.65), dashed: true, label: "Projected")
-            legendItem(color: .secondary, dashed: true, label: "Even pace")
+            legendItem(statusColor, Stroke.spent, "Spent")
+            legendItem(statusColor.opacity(0.65), Stroke.projected, "Projected")
+            legendItem(Self.evenPaceColor, Stroke.evenPace, "Even pace")
             Spacer(minLength: 0)
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
     }
 
-    private func legendItem(color: Color, dashed: Bool, label: String) -> some View {
-        HStack(spacing: 5) {
-            Capsule()
-                .fill(color)
-                .frame(width: dashed ? 6 : 14, height: 2)
-                .overlay(alignment: .trailing) {
-                    if dashed {
-                        Capsule().fill(color).frame(width: 6, height: 2).offset(x: 8)
-                    }
-                }
+    /// A short stretch of the line itself, stroked with the very style the plot
+    /// uses. The swatch is laid out at its true width, so it can never spill
+    /// over the label beside it.
+    private func legendItem(_ color: Color, _ stroke: StrokeStyle, _ label: String) -> some View {
+        HStack(spacing: 6) {
+            Path {
+                $0.move(to: CGPoint(x: 0, y: 1))
+                $0.addLine(to: CGPoint(x: Self.swatchWidth, y: 1))
+            }
+            .stroke(color, style: stroke)
+            .frame(width: Self.swatchWidth, height: 2)
+
             Text(label)
         }
     }
+
+    /// Wide enough that a dashed swatch reads as dashed and a dotted one as
+    /// dotted, rather than as one stub of line.
+    private static let swatchWidth: CGFloat = 20
 
     // MARK: - Stats
 

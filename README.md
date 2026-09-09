@@ -3,7 +3,7 @@
 Tudget. Track your budget.
 
 A native iOS budget tracker built around one idea: logging a purchase should
-take two taps, in whatever currency you spent, and the app should tell you
+take one gesture, in whatever currency you spent, and the app should tell you
 whether you can afford the next one.
 
 Everything lives on your phone. There's no account, no server to run, and
@@ -13,15 +13,17 @@ nothing to sign into.
 
 **Capture, in roughly the time it takes to put your card away**
 
-- **Control Centre button** — swipe down, tap, type `Trader Joe's $34 groceries`.
-  The merchant, amount, currency, and category are parsed as you type.
+- **Say it.** Hold the bar above the tab bar and talk — *"twelve forty at Blue
+  Bottle on food"* — then let go. It shows you what it heard, big enough to
+  read while you're still walking, and you tap **Yes**. Recognition runs on
+  the phone.
+- **Type it.** Slide up on the same bar for two fields: a price on a number
+  pad, and a merchant. No sentence to phrase correctly.
 - **Share a screenshot** — screenshot the bank's push notification, hit Share,
   pick Tudget. On-device OCR reads the amount, you tap a category, done. The
   app never has to be opened.
-- **The bar above the tab bar** — always there, on every screen, one tap from
-  a logged purchase.
-- **Home & Lock Screen widgets** — what's left this cycle, and a tap goes
-  straight to entry.
+- **Control Centre button, Home & Lock Screen widgets** — what's left this
+  cycle, and a tap goes straight to entry.
 
 Anything logged without a category waits under *Needs a category* rather than
 blocking you at the till — the same trick the old SMS version used.
@@ -103,5 +105,6 @@ xcodebuild test -project Tudget.xcodeproj -scheme Tudget \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
-62 tests covering currency parsing, purchase-text extraction, category
-matching, the fortnightly period maths, and the pace projection.
+85 tests covering currency parsing, typed and spoken purchase-text
+extraction, category matching, the fortnightly period maths, and the pace
+projection.

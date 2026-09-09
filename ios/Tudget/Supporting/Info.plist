@@ -49,6 +49,13 @@
 		</dict>
 	</array>
 
+	<!-- Holding the capture bar and saying a purchase out loud. Recognition
+	     runs on device wherever the phone has a model for the locale. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hold the Add button and say a purchase out loud instead of typing it.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turns what you say into a purchase. Recognition happens on this phone.</string>
+
 	<!-- Attaching a receipt to a purchase. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pick a screenshot of a purchase notification, or attach a receipt photo to a purchase.</string>

@@ -29,6 +29,28 @@ enum DebugSeed {
         }
     }
 
+    /// Entry sheet to open on launch, from `TUDGET_ENTRY`:
+    ///
+    ///     TUDGET_ENTRY=manual                     the fields, empty
+    ///     TUDGET_ENTRY="heard:$12 at Blue Bottle" the verify step
+    ///
+    /// The verify step is otherwise unreachable on a Simulator, which has no
+    /// microphone to hold the capture bar down for.
+    static func requestedEntry(
+        categoryNames: [String], defaultCurrency: String
+    ) -> PurchaseEntryRequest? {
+        guard let raw = ProcessInfo.processInfo.environment["TUDGET_ENTRY"] else { return nil }
+
+        if raw == "manual" { return .manual }
+
+        guard raw.hasPrefix("heard:") else { return nil }
+        let sentence = String(raw.dropFirst("heard:".count))
+        let parsed = PurchaseTextParser.parseSpokenEntry(
+            sentence, categoryNames: categoryNames, defaultCurrency: defaultCurrency
+        )
+        return .heard(sentence, draft: PurchaseDraft(parsed))
+    }
+
     @MainActor
     static func run(context: ModelContext, settings: AppSettings) {
         let calendar = Calendar.current

@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// "What was this?" — the categorize step, on its own.
+/// "What was this?" -- the categorize step, on its own.
 ///
 /// This is the SMS reply flow rebuilt as a screen: a purchase already exists,
 /// it just needs telling what it was, and the answer comes back as the same

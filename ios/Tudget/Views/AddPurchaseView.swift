@@ -1,13 +1,14 @@
 import SwiftUI
 import SwiftData
 
-/// Log a purchase from one line of text.
+/// Confirm a spoken purchase, or type one in.
 ///
-/// The whole screen is built around the assumption that you're standing at a
-/// counter: the field is focused before the sheet finishes animating in, the
-/// parse updates as you type so you can see it understood you, and Return
-/// saves. Everything else -- date, note, receipt -- is behind a disclosure and
-/// out of the way.
+/// Two ways in, one screen. Holding the capture bar and speaking lands here on
+/// the verify step: what was heard, big enough to read at arm's length, with
+/// *Yes* and *Edit*. Everything else -- a swipe up on the capture bar, a
+/// widget, a transcript with no amount in it -- lands on the fields, where the
+/// amount and the merchant are two separate boxes rather than one line somebody
+/// has to phrase correctly.
 struct AddPurchaseView: View {
 
     @Environment(AppSettings.self) private var settings
@@ -15,13 +16,19 @@ struct AddPurchaseView: View {
     @Environment(\.dismiss) private var dismiss
 
     @Query(sort: \BudgetCategory.sortOrder) private var categories: [BudgetCategory]
-    @Query(sort: \Transaction.timestamp, order: .reverse) private var transactions: [Transaction]
 
-    /// Pre-filled when arriving from a screenshot rather than the keyboard.
-    var prefill: PurchaseDraft?
+    /// What opened the sheet, and with what.
+    let request: PurchaseEntryRequest
 
-    @State private var text = ""
+    private enum Stage { case verifying, editing }
+    private enum Field { case amount, merchant }
+
+    @State private var stage: Stage = .editing
+    @State private var merchant = ""
+    @State private var amountText = ""
+    @State private var currencyCode = ""
     @State private var pickedCategory: BudgetCategory?
+    @State private var notice: String?
     @State private var showingDetails = false
     @State private var date = Date()
     @State private var note = ""
@@ -29,113 +36,197 @@ struct AddPurchaseView: View {
     /// Set once saved: the "what's left" line, shown briefly before dismissing.
     @State private var confirmation: String?
 
-    @FocusState private var fieldFocused: Bool
+    @FocusState private var focus: Field?
 
-    private var parsed: PurchaseTextParser.QuickEntry {
-        PurchaseTextParser.parseQuickEntry(
-            text,
-            categoryNames: categories.map(\.name),
-            defaultCurrency: settings.homeCurrencyCode
-        )
+    private var amount: Double {
+        CurrencyParser.parseNumber(amountText) ?? 0
     }
 
-    /// The category actually used: an explicit tap always beats the parse.
-    private var effectiveCategory: BudgetCategory? {
-        if let pickedCategory { return pickedCategory }
-        guard let name = parsed.category else { return nil }
-        return categories.first { $0.name == name }
-    }
-
-    private var canSave: Bool {
-        (parsed.amount ?? 0) > 0 && !isSaving
-    }
+    /// A purchase needs a category before it can be saved: an amount with no
+    /// category is a number the budget can't do anything with.
+    private var canSave: Bool { amount > 0 && pickedCategory != nil && !isSaving }
 
     var body: some View {
         NavigationStack {
             Group {
                 if let confirmation {
                     confirmationView(confirmation)
+                } else if stage == .verifying {
+                    verifyStep
                 } else {
-                    form
+                    editStep
                 }
             }
-            .background(AmbientBackground(tint: effectiveCategory?.tint.color ?? .blue))
-            .navigationTitle("Add a purchase")
+            .background(AmbientBackground(tint: pickedCategory?.tint.color ?? .blue))
+            .navigationTitle(stage == .verifying ? "Is this right?" : "Add a purchase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(!canSave)
-                        .buttonStyle(.glassProminent)
+                if stage == .editing, confirmation == nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { Task { await save() } }
+                            .disabled(!canSave)
+                            .buttonStyle(.glassProminent)
+                    }
+                }
+                // The decimal pad has no return key, so without this there's
+                // no way back out of the amount field.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focus = nil }
                 }
             }
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(.regularMaterial)
-        .onAppear(perform: applyPrefill)
+        .onAppear(perform: applyRequest)
     }
 
-    // MARK: - Form
+    // MARK: - Verify
 
-    private var form: some View {
+    /// The whole point of speaking a purchase is not having to look at the
+    /// phone while you do it -- so this step is readable in one glance and
+    /// answerable with one thumb.
+    private var verifyStep: some View {
+        VStack(spacing: Theme.Metric.cardSpacing) {
+            Spacer(minLength: 0)
+
+            if let heard = request.heard {
+                Label("\u{201C}\(heard)\u{201D}", systemImage: "waveform")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            VStack(spacing: 6) {
+                Text(Currency.format(amount, code: currencyCode))
+                    .font(Theme.hero)
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+
+                Text(merchant.isEmpty ? "Unknown" : merchant)
+                    .font(.title3.weight(.medium))
+                    .multilineTextAlignment(.center)
+
+                if let category = pickedCategory {
+                    Text(category.displayName)
+                        .font(.subheadline)
+                        .glassChip(tint: category.tint.color, selected: true)
+                        .padding(.top, 4)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .glassCard()
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 10) {
+                Button {
+                    Task { await save() }
+                } label: {
+                    Label("Yes, log it", systemImage: "checkmark")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(!canSave)
+
+                Button {
+                    withAnimation(.smooth) { stage = .editing }
+                    focus = .amount
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.glass)
+            }
+        }
+        .padding(Theme.Metric.gutter)
+    }
+
+    // MARK: - Fields
+
+    private var editStep: some View {
         ScrollView {
             VStack(spacing: Theme.Metric.cardSpacing) {
-                entryField
-                if (parsed.amount ?? 0) > 0 { parseSummary }
+                if let notice { noticeCard(notice) }
+                amountField
+                merchantField
                 categoryPicker
                 detailsDisclosure
             }
             .padding(Theme.Metric.gutter)
         }
-    }
-
-    private var entryField: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Trader Joe's $34 groceries", text: $text, axis: .vertical)
-                .font(.title3)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-                .focused($fieldFocused)
-                .submitLabel(.done)
-                .onSubmit { if canSave { Task { await save() } } }
-
-            Text("Merchant, amount, and a category — in any order.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
         .task {
             // A beat, so focus lands after the sheet's presentation animation
             // rather than fighting it.
+            guard stage == .editing, focus == nil else { return }
             try? await Task.sleep(for: .milliseconds(350))
-            fieldFocused = true
+            if focus == nil { focus = .amount }
         }
     }
 
-    /// Shows what was understood, so a misparse is visible before you save
-    /// rather than discovered in the ledger a week later.
-    private var parseSummary: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Merchant").font(.caption2).foregroundStyle(.secondary)
-                Text(parsed.merchant ?? "—")
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
+    private func noticeCard(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.bubble")
+            .font(.footnote)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .tintedGlassCard(.orange, radius: Theme.Metric.tightRadius)
+    }
+
+    private var amountField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Amount")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Currency", selection: $currencyCode) {
+                    ForEach(Currency.pickerCodes(deviceCode: Currency.deviceCurrencyCode), id: \.self) {
+                        Text($0).tag($0)
+                    }
+                }
+                .labelsHidden()
             }
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("Amount").font(.caption2).foregroundStyle(.secondary)
-                Text(Currency.format(parsed.amount ?? 0, code: parsed.currencyCode))
-                    .font(Theme.figure)
-                    .contentTransition(.numericText())
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(Currency.displaySymbol[currencyCode] ?? currencyCode)
+                    .font(Theme.title)
+                    .foregroundStyle(.secondary)
+
+                TextField("0", text: $amountText)
+                    .font(Theme.title)
+                    // A price is digits and a decimal point and nothing else,
+                    // so it gets the pad that is only those.
+                    .keyboardType(.decimalPad)
+                    .focused($focus, equals: .amount)
             }
         }
-        .animation(.smooth, value: parsed)
-        .glassCard(radius: Theme.Metric.tightRadius)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private var merchantField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Merchant")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("Where", text: $merchant)
+                .font(.title3)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .focused($focus, equals: .merchant)
+                .submitLabel(.done)
+                .onSubmit { focus = nil }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
     }
 
     private var categoryPicker: some View {
@@ -143,8 +234,8 @@ struct AddPurchaseView: View {
             HStack {
                 Text("Category").font(.subheadline.weight(.semibold))
                 Spacer()
-                if effectiveCategory == nil {
-                    Text("Optional — you can set it later")
+                if pickedCategory == nil {
+                    Text("Pick one to save")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -153,11 +244,9 @@ struct AddPurchaseView: View {
             GlassEffectContainer(spacing: 8) {
                 FlowLayout(spacing: 8) {
                     ForEach(categories) { category in
-                        let isSelected = effectiveCategory?.uuid == category.uuid
+                        let isSelected = pickedCategory?.uuid == category.uuid
                         Button {
-                            withAnimation(.smooth) {
-                                pickedCategory = isSelected ? nil : category
-                            }
+                            withAnimation(.smooth) { pickedCategory = category }
                         } label: {
                             Text(category.displayName)
                                 .font(.subheadline)
@@ -207,29 +296,44 @@ struct AddPurchaseView: View {
 
     // MARK: - Actions
 
-    private func applyPrefill() {
-        guard let prefill, text.isEmpty else { return }
-        text = prefill.asQuickEntryText
-        date = prefill.timestamp
-        if let name = prefill.categoryName {
+    private func applyRequest() {
+        guard currencyCode.isEmpty else { return }
+
+        let draft = request.draft
+        merchant = draft.merchant
+        amountText = draft.amountText
+        currencyCode = draft.currencyCode.isEmpty ? settings.homeCurrencyCode : draft.currencyCode
+        if let name = draft.categoryName {
             pickedCategory = categories.first { $0.name == name }
+        }
+        notice = request.notice
+
+        // Only a transcript we actually got an amount *and* a category out of
+        // is worth putting on the verify step; anything else would be asking
+        // "is this right?" about something still missing a required answer.
+        if request.heard != nil, amount > 0, pickedCategory != nil {
+            stage = .verifying
+        } else {
+            stage = .editing
+            if let heard = request.heard, notice == nil {
+                notice = "I heard \u{201C}\(heard)\u{201D} but couldn't pick an amount out of it."
+            }
         }
     }
 
     private func save() async {
-        guard let amount = parsed.amount, amount > 0 else { return }
+        guard amount > 0, let category = pickedCategory, !isSaving else { return }
         isSaving = true
-
-        let category = effectiveCategory
+        focus = nil
 
         await Ledger.record(
-            merchant: parsed.merchant ?? "Unknown",
+            merchant: merchant.isEmpty ? "Unknown" : merchant,
             amount: amount,
-            currencyCode: parsed.currencyCode,
+            currencyCode: currencyCode,
             category: category,
             note: note.isEmpty ? nil : note,
             timestamp: showingDetails ? date : Date(),
-            source: prefill == nil ? .quickEntry : .screenshot,
+            source: request.heard == nil ? .manual : .voice,
             context: context,
             settings: settings
         )
@@ -242,7 +346,7 @@ struct AddPurchaseView: View {
         dismiss()
     }
 
-    private func confirmationLine(for category: BudgetCategory?) -> String {
+    private func confirmationLine(for category: BudgetCategory) -> String {
         let period = settings.period()
         let summary = BudgetCalculator.summary(
             categories: Ledger.limits(from: categories),
@@ -251,29 +355,61 @@ struct AddPurchaseView: View {
             homeCurrency: settings.homeCurrencyCode
         )
 
-        guard let category else {
-            return "Logged. Tell me what it was when you get a moment."
-        }
         return BudgetCalculator.confirmationLine(for: category.uuid, summary: summary)
     }
 }
 
-/// What a screenshot (or any non-keyboard source) hands to the entry screen.
-struct PurchaseDraft: Equatable {
-    var merchant: String?
-    var amount: Double?
-    var currencyCode: String
-    var categoryName: String?
-    var timestamp: Date = Date()
-    var receiptFilename: String?
+// MARK: - What opens the sheet
 
-    /// Rendered back into the one-line grammar, so the screenshot path and the
-    /// typed path converge on the same editable text.
-    var asQuickEntryText: String {
-        var parts: [String] = []
-        if let merchant { parts.append(merchant) }
-        if let amount { parts.append(Currency.format(amount, code: currencyCode)) }
-        return parts.joined(separator: " ")
+/// A purchase on its way in, before it's a `Transaction`.
+///
+/// The amount is held as text rather than a number because that is what the
+/// field edits, and because "12." is a real thing to be halfway through
+/// typing.
+struct PurchaseDraft: Equatable {
+    var merchant = ""
+    var amountText = ""
+    /// Empty means "whatever the home currency is".
+    var currencyCode = ""
+    var categoryName: String?
+
+    /// Builds a draft from what the parser made of a sentence.
+    init(_ entry: PurchaseTextParser.QuickEntry) {
+        merchant = entry.merchant ?? ""
+        currencyCode = entry.currencyCode
+        categoryName = entry.category
+        if let amount = entry.amount, amount > 0 {
+            amountText = String(
+                format: "%.\(Currency.decimalPlaces(for: entry.currencyCode))f", amount
+            )
+        }
+    }
+
+    init() {}
+}
+
+/// Why the entry sheet is open, and what it should show first.
+struct PurchaseEntryRequest: Identifiable, Equatable {
+
+    let id = UUID()
+    var draft = PurchaseDraft()
+    /// The sentence dictation heard. Its presence is what puts the sheet on
+    /// the verify step rather than straight into the fields.
+    var heard: String?
+    /// Shown above the fields: why we're typing rather than talking.
+    var notice: String?
+
+    /// Swiped up on the capture bar, or arrived from a widget.
+    static var manual: Self { .init() }
+
+    /// Held the capture bar and said something.
+    static func heard(_ text: String, draft: PurchaseDraft) -> Self {
+        .init(draft: draft, heard: text)
+    }
+
+    /// Held the capture bar, but the mic never got going.
+    static func couldNotListen(_ reason: String) -> Self {
+        .init(notice: reason)
     }
 }
 

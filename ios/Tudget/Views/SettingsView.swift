@@ -149,7 +149,7 @@ struct SettingsView: View {
             }
             .font(.subheadline)
 
-            Text("Changing this doesn't reconvert past purchases — each one keeps the rate it was logged at.")
+            Text("Changing this doesn't reconvert past purchases. Each one keeps the rate it was logged at.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -308,7 +308,7 @@ private struct CategoryEditor: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Colour").font(.subheadline.weight(.semibold))
-                        Text("Every colour here is checked for colourblind separation — the set is deliberately small.")
+                        Text("Every colour here is checked for colourblind separation, so the set is deliberately small.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
@@ -345,7 +345,7 @@ private struct CategoryEditor: View {
                         .buttonStyle(.glass)
                         .tint(.red)
 
-                        Text("Purchases in this category are kept — they just become uncategorized.")
+                        Text("Purchases in this category are kept. They just become uncategorized.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)

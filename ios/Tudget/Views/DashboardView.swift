@@ -153,7 +153,7 @@ struct DashboardView: View {
         HStack(spacing: 8) {
             Image(systemName: projection.pace == .onTrack
                   ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-            Text(projection.summarySentence())
+            Text(projection.summaryLine())
                 .font(.footnote)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)

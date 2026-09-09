@@ -5,6 +5,7 @@ import SwiftData
 /// at a glance whether you typed something in or it came off a screenshot.
 enum TransactionSource: String, Codable, CaseIterable, Sendable {
     case manual
+    case voice
     case quickEntry
     case screenshot
     case shareExtension
@@ -13,6 +14,7 @@ enum TransactionSource: String, Codable, CaseIterable, Sendable {
     var label: String {
         switch self {
         case .manual: return "Typed"
+        case .voice: return "Spoken"
         case .quickEntry: return "Quick entry"
         case .screenshot: return "Screenshot"
         case .shareExtension: return "Shared"
@@ -23,6 +25,7 @@ enum TransactionSource: String, Codable, CaseIterable, Sendable {
     var systemImage: String {
         switch self {
         case .manual: return "keyboard"
+        case .voice: return "waveform"
         case .quickEntry: return "bolt.fill"
         case .screenshot: return "camera.viewfinder"
         case .shareExtension: return "square.and.arrow.up"

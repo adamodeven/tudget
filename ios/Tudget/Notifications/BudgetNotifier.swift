@@ -12,7 +12,7 @@ import UserNotifications
 ///    and then it can't warn you about anything.
 /// 2. **Alerts are recomputed from state, never queued ahead.** Delete a
 ///    purchase and drop back under the line, and the alert becomes eligible
-///    again — the record of what's fired is keyed to the period and the level.
+///    again -- the record of what's fired is keyed to the period and the level.
 actor BudgetNotifier {
 
     static let shared = BudgetNotifier()

@@ -53,40 +53,16 @@ enum VisionOCR {
 
     /// The whole pipeline: screenshot in, purchase out.
     ///
-    /// Tries the recognized lines joined together first, since bank alerts
-    /// usually wrap one sentence across lines. If that yields no amount, it
-    /// falls back to scanning individual lines, which rescues layouts where
-    /// the amount sits alone in its own block.
+    /// The lines are handed over intact rather than pre-joined: a bank alert's
+    /// sentence reads the same either way, but on an app screen the line
+    /// breaks are what tell the parser which text is the merchant.
     static func extractPurchase(
         from image: UIImage, defaultCurrency: String
     ) async throws -> PurchaseTextParser.NotificationPurchase? {
         let lines = try await recognizeText(in: image)
-        guard !lines.isEmpty else { return nil }
-
-        let joined = lines.joined(separator: " ")
-        if let purchase = PurchaseTextParser.parseNotification(
-            joined, defaultCurrency: defaultCurrency
-        ) {
-            return purchase
-        }
-
-        for line in lines {
-            if let purchase = PurchaseTextParser.parseNotification(
-                line, defaultCurrency: defaultCurrency
-            ) {
-                // Keep the full text around even when only one line parsed, so
-                // the review screen can show everything that was on screen.
-                return PurchaseTextParser.NotificationPurchase(
-                    merchant: purchase.merchant
-                        ?? PurchaseTextParser.extractMerchant(from: joined),
-                    amount: purchase.amount,
-                    currencyCode: purchase.currencyCode,
-                    rawText: joined
-                )
-            }
-        }
-
-        return nil
+        return PurchaseTextParser.parseScreenshot(
+            lines: lines, defaultCurrency: defaultCurrency
+        )
     }
     #endif
 }

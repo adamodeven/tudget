@@ -5,7 +5,7 @@ import PhotosUI
 /// Import a purchase from a screenshot of a bank notification.
 ///
 /// The OCR result is always shown as an *editable draft*, never saved blind,
-/// and the raw recognized text is one tap away — so a bad parse is obvious and
+/// and the raw recognized text is one tap away -- so a bad parse is obvious and
 /// fixable rather than a mysterious wrong number in the ledger later.
 struct ScreenshotImportView: View {
 
@@ -38,6 +38,10 @@ struct ScreenshotImportView: View {
         CurrencyParser.parseNumber(amountText) ?? 0
     }
 
+    /// A purchase needs a category before it can be saved: an amount with no
+    /// category is a number the budget can't do anything with.
+    private var canSave: Bool { amount > 0 && pickedCategory != nil }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -58,7 +62,7 @@ struct ScreenshotImportView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") { Task { await save() } }
                             .buttonStyle(.glassProminent)
-                            .disabled(amount <= 0)
+                            .disabled(!canSave)
                     }
                 }
             }
@@ -116,7 +120,7 @@ struct ScreenshotImportView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
 
-            Text("Faster still: screenshot the alert, hit Share, and pick Tudget — no need to open the app.")
+            Text("Faster still: screenshot the alert, hit Share, and pick Tudget. No need to open the app.")
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.tertiary)
@@ -140,7 +144,7 @@ struct ScreenshotImportView: View {
 
     private var couldNotReadCard: some View {
         Label(
-            "I couldn't find an amount in that image — type it in and it'll save just the same.",
+            "I couldn't find an amount in that image. Type it in and it'll save just the same.",
             systemImage: "exclamationmark.triangle.fill"
         )
         .font(.footnote)
@@ -188,15 +192,21 @@ struct ScreenshotImportView: View {
 
     private var categoryPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Category").font(.subheadline.weight(.semibold))
+            HStack {
+                Text("Category").font(.subheadline.weight(.semibold))
+                Spacer()
+                if pickedCategory == nil {
+                    Text("Pick one to save")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             GlassEffectContainer(spacing: 8) {
                 FlowLayout(spacing: 8) {
                     ForEach(categories) { category in
                         let isSelected = pickedCategory?.uuid == category.uuid
                         Button {
-                            withAnimation(.smooth) {
-                                pickedCategory = isSelected ? nil : category
-                            }
+                            withAnimation(.smooth) { pickedCategory = category }
                         } label: {
                             Text(category.displayName)
                                 .font(.subheadline)
@@ -277,7 +287,7 @@ struct ScreenshotImportView: View {
     }
 
     private func save() async {
-        guard amount > 0 else { return }
+        guard amount > 0, let category = pickedCategory else { return }
 
         var receiptFilename: String?
         if let image, let data = image.jpegData(compressionQuality: 0.7) {
@@ -288,7 +298,7 @@ struct ScreenshotImportView: View {
             merchant: merchant.isEmpty ? "Unknown" : merchant,
             amount: amount,
             currencyCode: currencyCode,
-            category: pickedCategory,
+            category: category,
             receiptFilename: receiptFilename,
             source: .screenshot,
             context: context,
@@ -299,9 +309,7 @@ struct ScreenshotImportView: View {
 
         let period = settings.period()
         let summary = Ledger.summary(for: period, context: context, settings: settings)
-        confirmation = pickedCategory.map {
-            BudgetCalculator.confirmationLine(for: $0.uuid, summary: summary)
-        } ?? "Logged. Tell me what it was when you get a moment."
+        confirmation = BudgetCalculator.confirmationLine(for: category.uuid, summary: summary)
 
         try? await Task.sleep(for: .milliseconds(1600))
         dismiss()

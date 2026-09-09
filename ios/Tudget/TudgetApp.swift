@@ -26,6 +26,14 @@ struct TudgetApp: App {
                     // screen doesn't mean tapping through to it every time:
                     //   SIMCTL_CHILD_TUDGET_TAB=pace
                     if let tab = DebugSeed.requestedTab { router.tab = tab }
+                    // ... or straight onto the entry sheet:
+                    //   SIMCTL_CHILD_TUDGET_ENTRY="heard:$12 at Blue Bottle"
+                    router.entry = DebugSeed.requestedEntry(
+                        categoryNames: Ledger.categoryNames(
+                            in: ModelContext(LedgerStore.shared)
+                        ),
+                        defaultCurrency: settings.homeCurrencyCode
+                    )
                 }
                 #endif
         }
@@ -49,7 +57,9 @@ final class AppRouter {
 
     var tab: Tab = .budget
 
-    var showingQuickAdd = false
+    /// The entry sheet, and what it should open showing: a spoken purchase
+    /// waiting to be confirmed, or empty fields.
+    var entry: PurchaseEntryRequest?
     var showingScreenshotImport = false
 
     /// The purchase currently being given a category, if any.
@@ -58,13 +68,15 @@ final class AppRouter {
     func handle(_ action: QuickAction) {
         switch action {
         case .quickAdd:
+            // Nothing outside the app can hold the capture bar down, so a
+            // widget or a Shortcut lands on the fields.
             showingScreenshotImport = false
-            showingQuickAdd = true
+            entry = .manual
         case .screenshot:
-            showingQuickAdd = false
+            entry = nil
             showingScreenshotImport = true
         case .pace:
-            showingQuickAdd = false
+            entry = nil
             showingScreenshotImport = false
             tab = .pace
         }

@@ -3,8 +3,8 @@ import SwiftData
 
 /// The share extension's whole UI: what was read, and which category it goes in.
 ///
-/// Modelled on the old SMS exchange — here's what I think you spent, tell me
-/// what it was — because that flow only ever needed one decision from you, and
+/// Modelled on the old SMS exchange: here's what I think you spent, tell me
+/// what it was. That flow only ever needed one decision from you, and
 /// tapping a category is faster than filling in a form.
 struct ShareReviewView: View {
 
@@ -32,6 +32,10 @@ struct ShareReviewView: View {
 
     private var amount: Double { CurrencyParser.parseNumber(amountText) ?? 0 }
 
+    /// A purchase needs a category before it can be saved: an amount with no
+    /// category is a number the budget can't do anything with.
+    private var canSave: Bool { amount > 0 && pickedCategory != nil }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -53,7 +57,7 @@ struct ShareReviewView: View {
                 if phase == .ready || phase == .noAmount {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") { Task { await save() } }
-                            .disabled(amount <= 0)
+                            .disabled(!canSave)
                             .buttonStyle(.glassProminent)
                     }
                 }
@@ -90,7 +94,7 @@ struct ShareReviewView: View {
             VStack(spacing: 14) {
                 if phase == .noAmount {
                     Label(
-                        "I couldn't read an amount off that — type it in and it'll save just the same.",
+                        "I couldn't read an amount off that. Type it in and it'll save just the same.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
                     .font(.footnote)
@@ -128,10 +132,7 @@ struct ShareReviewView: View {
                         ) {
                             ForEach(categories) { category in
                                 Button {
-                                    withAnimation(.smooth) {
-                                        pickedCategory =
-                                            pickedCategory?.uuid == category.uuid ? nil : category
-                                    }
+                                    withAnimation(.smooth) { pickedCategory = category }
                                 } label: {
                                     VStack(spacing: 3) {
                                         Text(category.emoji.isEmpty ? "•" : category.emoji)
@@ -155,7 +156,7 @@ struct ShareReviewView: View {
                         }
                     }
 
-                    Text("Leave it blank and it'll wait for you in the app.")
+                    Text("Pick one to save.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -221,7 +222,7 @@ struct ShareReviewView: View {
 
     @MainActor
     private func save() async {
-        guard amount > 0 else { return }
+        guard amount > 0, let category = pickedCategory else { return }
         phase = .saving
 
         var receiptFilename: String?
@@ -233,7 +234,7 @@ struct ShareReviewView: View {
             merchant: merchant.isEmpty ? "Unknown" : merchant,
             amount: amount,
             currencyCode: currencyCode,
-            category: pickedCategory,
+            category: category,
             receiptFilename: receiptFilename,
             source: .shareExtension,
             context: context,
@@ -242,9 +243,7 @@ struct ShareReviewView: View {
 
         let period = settings.period()
         let summary = Ledger.summary(for: period, context: context, settings: settings)
-        confirmation = pickedCategory.map {
-            BudgetCalculator.confirmationLine(for: $0.uuid, summary: summary)
-        } ?? "Logged. Tell me what it was when you open Tudget."
+        confirmation = BudgetCalculator.confirmationLine(for: category.uuid, summary: summary)
 
         try? await Task.sleep(for: .milliseconds(1500))
         onFinish()

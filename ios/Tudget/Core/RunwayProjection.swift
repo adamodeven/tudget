@@ -246,34 +246,31 @@ extension RunwayProjection {
 
 extension RunwayProjection {
 
-    /// The headline sentence under the chart.
-    func summarySentence(now: Date = Date(), calendar: Calendar = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.dateFormat = "EEEE d MMM"
-
+    /// The line under the pace headline.
+    ///
+    /// A fragment rather than a sentence, and the same shape in every state:
+    /// where the period lands you, and by how much. `paceHeadline` sits right
+    /// above it and already says whether that's a forecast or a fact, so this
+    /// line only has to carry the number.
+    func summaryLine(now: Date = Date(), calendar: Calendar = .current) -> String {
         switch pace {
         case .alreadyOver:
-            let over = Currency.formatCompact(spent - limit, code: homeCurrency)
-            return "You're \(over) over budget for this period."
+            // "already" is what separates this from the projected overspend
+            // above it: that one hasn't happened yet, this one has.
+            return "\(Currency.formatCompact(spent - limit, code: homeCurrency)) over already"
 
         case .willOverspend:
-            guard let runOutDate else { return "You're spending faster than this period allows." }
-            let short = daysShort(calendar: calendar) ?? 0
-            let dateText = formatter.string(from: runOutDate)
-            if short == 0 {
-                return "At \(Currency.formatCompact(dailyBurn, code: homeCurrency))/day you run out on \(dateText), the last day."
-            }
-            let dayWord = short == 1 ? "day" : "days"
-            return "At \(Currency.formatCompact(dailyBurn, code: homeCurrency))/day you run out on \(dateText) — \(short) \(dayWord) early."
+            return "\(Currency.formatCompact(projectedTotal - limit, code: homeCurrency)) over"
 
         case .onTrack:
-            let left = Currency.formatCompact(limit - projectedTotal, code: homeCurrency)
+            // Once the period is done the projection is just the total, and
+            // the number worth showing is what actually went unspent.
             let remainingDays = period.remainingDays(asOf: now, calendar: calendar)
-            guard remainingDays > 0 else {
-                return "You finished the period \(Currency.formatCompact(limit - spent, code: homeCurrency)) under budget."
-            }
-            return "At \(Currency.formatCompact(dailyBurn, code: homeCurrency))/day you finish with \(left) to spare."
+            let left = remainingDays > 0 ? limit - projectedTotal : limit - spent
+            // The run-out date rounds up to a whole day, so a period can be
+            // on track and still project a hair over the limit. Never report
+            // that as a negative amount left.
+            return "\(Currency.formatCompact(max(0, left), code: homeCurrency)) under"
         }
     }
 

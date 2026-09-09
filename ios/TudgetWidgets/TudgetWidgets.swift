@@ -64,7 +64,7 @@ struct BudgetProvider: TimelineProvider {
 
     // WidgetKit calls these on the main thread, but they aren't declared as
     // main-actor, and the SwiftData context they reach for is main-actor
-    // bound — so the isolation is asserted rather than hopped, which would
+    // bound -- so the isolation is asserted rather than hopped, which would
     // deadlock a synchronous completion handler.
     func getSnapshot(in context: Context, completion: @escaping (BudgetEntry) -> Void) {
         MainActor.assumeIsolated { completion(makeEntry()) }
@@ -260,7 +260,7 @@ struct BudgetWidgetView: View {
                         Capsule()
                             .fill(statusColor)
                             .frame(width: max(3, proxy.size.width * entry.fractionUsed))
-                        // Where the cycle has got to — the gap between this and
+                        // Where the cycle has got to -- the gap between this and
                         // the fill is the actual signal.
                         Capsule()
                             .fill(.primary.opacity(0.6))

@@ -81,11 +81,7 @@ struct TransactionDetailView: View {
                         let isSelected = transaction.category?.uuid == category.uuid
                         Button {
                             withAnimation(.smooth) {
-                                Ledger.categorize(
-                                    transaction,
-                                    as: isSelected ? nil : category,
-                                    context: context
-                                )
+                                Ledger.categorize(transaction, as: category, context: context)
                             }
                         } label: {
                             Text(category.displayName)
@@ -293,7 +289,9 @@ struct EditPurchaseView: View {
     }
 
     private var amount: Double { CurrencyParser.parseNumber(amountText) ?? 0 }
-    private var canSave: Bool { amount > 0 && !isSaving }
+    /// A purchase needs a category before it can be saved: an amount with no
+    /// category is a number the budget can't do anything with.
+    private var canSave: Bool { amount > 0 && pickedCategory != nil && !isSaving }
 
     var body: some View {
         NavigationStack {
@@ -357,16 +355,22 @@ struct EditPurchaseView: View {
 
     private var categoryPicker: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Category").font(.subheadline.weight(.semibold))
+            HStack {
+                Text("Category").font(.subheadline.weight(.semibold))
+                Spacer()
+                if pickedCategory == nil {
+                    Text("Pick one to save")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             GlassEffectContainer(spacing: 8) {
                 FlowLayout(spacing: 8) {
                     ForEach(categories) { category in
                         let isSelected = pickedCategory?.uuid == category.uuid
                         Button {
-                            withAnimation(.smooth) {
-                                pickedCategory = isSelected ? nil : category
-                            }
+                            withAnimation(.smooth) { pickedCategory = category }
                         } label: {
                             Text(category.displayName)
                                 .font(.subheadline)
@@ -383,7 +387,7 @@ struct EditPurchaseView: View {
     }
 
     private func save() async {
-        guard amount > 0 else { return }
+        guard amount > 0, let category = pickedCategory else { return }
         isSaving = true
 
         await Ledger.update(
@@ -391,7 +395,7 @@ struct EditPurchaseView: View {
             merchant: merchant,
             amount: amount,
             currencyCode: currencyCode,
-            category: pickedCategory,
+            category: category,
             note: note.isEmpty ? nil : note,
             timestamp: date,
             context: context,

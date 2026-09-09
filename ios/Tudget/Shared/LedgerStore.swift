@@ -23,7 +23,7 @@ enum LedgerStore {
             if let container = try? makeContainer(useAppGroup: true) {
                 return container
             }
-            print("Tudget: App Group store unavailable — falling back to a local store.")
+            print("Tudget: App Group store unavailable, falling back to a local store.")
         }
 
         if let container = try? makeContainer(useAppGroup: false) {
@@ -32,7 +32,7 @@ enum LedgerStore {
 
         // Nothing left to try; an in-memory store keeps the process alive so
         // the failure surfaces as an empty ledger rather than a crash on launch.
-        print("Tudget: on-disk store unavailable — running in memory only.")
+        print("Tudget: on-disk store unavailable, running in memory only.")
         return try! makeContainer(inMemory: true)
     }()
 

@@ -105,7 +105,7 @@ struct BudgetSetupView: View {
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 12) {
-                setupBullet("bolt.fill", "Type a line", "\"Trader Joe's $34 groceries\" — merchant, amount, and category in one go.")
+                setupBullet("bolt.fill", "Type a line", "\"Trader Joe's $34 groceries\": merchant, amount, and category in one go.")
                 setupBullet("square.and.arrow.up", "Share a screenshot", "Screenshot a bank alert, share it to Tudget, and it reads the amount.")
                 setupBullet("chart.xyaxis.line", "See your pace", "Know the day you'd run out at the rate you're going.")
             }
@@ -182,7 +182,7 @@ struct BudgetSetupView: View {
                     .keyboardType(.decimalPad)
                     .font(Theme.title)
 
-                Text("Take-home pay for one \(periodLength.label.lowercased()) cycle, after tax. Used to suggest limits — you can change every one of them next.")
+                Text("Take-home pay for one \(periodLength.label.lowercased()) cycle, after tax. Used to suggest limits, and you can change every one of them next.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

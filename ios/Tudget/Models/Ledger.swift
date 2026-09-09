@@ -236,7 +236,7 @@ enum Ledger {
         } catch {
             // A failed save is worth knowing about in the console, but there's
             // nothing useful to show the user mid-entry.
-            print("Tudget: save failed — \(error)")
+            print("Tudget: save failed: \(error)")
         }
         WidgetCenter.shared.reloadAllTimelines()
     }

@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 ///
 /// The extension writes straight into the shared SwiftData store rather than
 /// queueing something for the app to pick up later, so a purchase captured
-/// this way is in the ledger — and on the widgets — before the share sheet has
+/// this way is in the ledger (and on the widgets) before the share sheet has
 /// finished dismissing.
 final class ShareViewController: UIViewController {
 

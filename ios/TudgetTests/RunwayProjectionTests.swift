@@ -1,7 +1,7 @@
 import XCTest
 @testable import Tudget
 
-/// The pace projection — the number the app leads with, so it needs to be
+/// The pace projection -- the number the app leads with, so it needs to be
 /// right at the edges as well as in the middle.
 final class RunwayProjectionTests: XCTestCase {
 
